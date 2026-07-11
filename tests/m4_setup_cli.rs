@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::process::Command;
 
 fn run(cwd: &std::path::Path, args: &[&str]) -> std::process::Output {
@@ -38,5 +39,42 @@ fn setup_skill_creates_exact_canonical_bytes_and_retries_unchanged() {
         String::from_utf8(unchanged.stdout)
             .unwrap()
             .contains("action: unchanged")
+    );
+}
+
+#[test]
+fn setup_skill_protects_differences_and_force_preserves_permissions() {
+    let directory = tempfile::tempdir().unwrap();
+    let output_path = directory.path().join("SKILL.md");
+    fs::write(&output_path, b"local edits").unwrap();
+    fs::set_permissions(&output_path, fs::Permissions::from_mode(0o640)).unwrap();
+    let path = output_path.to_str().unwrap();
+
+    let conflict = run(directory.path(), &["setup", "skill", "--output", path]);
+    assert!(!conflict.status.success());
+    assert!(
+        String::from_utf8(conflict.stdout)
+            .unwrap()
+            .contains("code: skill_output_conflict")
+    );
+    assert_eq!(fs::read(&output_path).unwrap(), b"local edits");
+
+    let updated = run(
+        directory.path(),
+        &["setup", "skill", "--output", path, "--force"],
+    );
+    assert!(updated.status.success());
+    assert!(
+        String::from_utf8(updated.stdout)
+            .unwrap()
+            .contains("action: updated")
+    );
+    assert_eq!(
+        fs::metadata(&output_path).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    assert_eq!(
+        fs::read(&output_path).unwrap(),
+        include_bytes!("../skills/jj-axi/SKILL.md")
     );
 }

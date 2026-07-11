@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write as _;
 use std::path::Path;
 
 use sha2::{Digest as _, Sha256};
@@ -33,9 +34,13 @@ pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, A
         if current == SKILL_BYTES {
             "unchanged"
         } else if force {
-            fs::write(&destination, SKILL_BYTES).map_err(|_| AppError::BackendFailure {
-                operation: "setup_skill",
-            })?;
+            let permissions = fs::metadata(&destination)
+                .map_err(|_| AppError::InvalidSkillOutput {
+                    path: destination.display().to_string(),
+                    reason: "unreadable",
+                })?
+                .permissions();
+            atomic_write(&destination, Some(permissions))?;
             "updated"
         } else {
             return Err(AppError::SkillOutputConflict {
@@ -43,9 +48,7 @@ pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, A
             });
         }
     } else {
-        fs::write(&destination, SKILL_BYTES).map_err(|_| AppError::BackendFailure {
-            operation: "setup_skill",
-        })?;
+        atomic_write(&destination, None)?;
         "created"
     };
     let sha256 = format!("{:x}", Sha256::digest(SKILL_BYTES));
@@ -54,5 +57,52 @@ pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, A
         sha256,
         bytes: SKILL_BYTES.len() as u64,
         action: action.to_owned(),
+    })
+}
+
+fn atomic_write(destination: &Path, permissions: Option<fs::Permissions>) -> Result<(), AppError> {
+    let parent = destination.parent().ok_or(AppError::Internal)?;
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(AppError::Internal)?;
+    for suffix in 0..100_u32 {
+        let temporary = parent.join(format!(
+            ".{file_name}.jj-axi-{}-{suffix}",
+            std::process::id()
+        ));
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => {
+                return Err(AppError::BackendFailure {
+                    operation: "setup_skill",
+                });
+            }
+        };
+        let result = (|| {
+            file.write_all(SKILL_BYTES)?;
+            file.sync_all()?;
+            if let Some(permissions) = permissions {
+                file.set_permissions(permissions)?;
+            }
+            drop(file);
+            fs::rename(&temporary, destination)?;
+            Ok::<(), std::io::Error>(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+            return Err(AppError::BackendFailure {
+                operation: "setup_skill",
+            });
+        }
+        return Ok(());
+    }
+    Err(AppError::BackendFailure {
+        operation: "setup_skill",
     })
 }
