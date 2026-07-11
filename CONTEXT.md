@@ -19,3 +19,15 @@ _Avoid_: Conflicted oplog, ambiguous history
 **Foundation operation**:
 A repository or workspace initialization operation whose removal would invalidate the active workspace. It is visible in operation history but is not an undo candidate.
 _Avoid_: Setup mutation, root action
+
+**Local bookmark**:
+A named repository reference expressing the local target an agent may organize or publish.
+_Avoid_: Branch, local branch
+
+**Tracked remote bookmark**:
+A locally recorded remote bookmark whose collaboration state Jujutsu follows across fetches and pushes.
+_Avoid_: Remote branch, tracking branch
+
+**Publication remote**:
+The Git remote selected as the destination of one explicit push operation; it is not inferred from bookmark tracking state.
+_Avoid_: Upstream, tracking remote

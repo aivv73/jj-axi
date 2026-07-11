@@ -59,7 +59,7 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 
 | Command | Wraps | Notes |
 |---|---|---|
-| `bookmark list/set/push` | `jj bookmark` | Precomputed ahead/behind counts vs. remote. |
+| `bookmark list/set/push` | `jj bookmark` + `jj git push` | Bounded multi-remote collaboration view over local tracking state; explicit safe local movement and exact-name publication. Listing never fetches. |
 | `pr status` | GitHub API | Derived field style, e.g. `checks: 3/3 passed`. |
 
 ### Setup
@@ -76,6 +76,7 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 3. **Scope of `validate`.** What invariants does this actually check that `inspect` and `undo` don't already surface? If the answer is "nothing new," cut the command rather than ship a placeholder.
 4. **Resolved `finish` composite boundary.** `--message` is optional; when omitted, the stored description must be non-empty. Without `--bookmark`, finish applies the optional message and returns readiness-only success without private finished metadata. With `--bookmark`, finish creates or fast-forwards only that exact name and pushes only that name. The remote is `git.push`, otherwise the sole configured remote, otherwise `origin`; no name or remote is inferred from tracking. Description and bookmark updates are one local operation retained when push fails, which returns a structured partial result.
 5. **Non-JS skill distribution.** `npx skills add <owner>/<repo>` assumes a resolvable npm entry point. jj-axi is a native Rust binary — `setup skill` needs either a thin npm wrapper shelling to a prebuilt binary, or a documented `cargo install`/`cargo binstall` path referenced from the skill's own install instructions.
+6. **Agent-native fetch.** `bookmark list` deliberately reads cached local tracking state and never contacts remotes. A future top-level `fetch [--remote]` command should refresh repository-wide collaboration state, but its network, authentication, multi-remote, and partial-result contracts must be designed before implementation; it is not part of the bookmark slice.
 
 ## 3. Licensing position
 
