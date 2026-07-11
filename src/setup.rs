@@ -26,7 +26,29 @@ pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, A
             reason: "missing_file_name",
         })?;
     let destination = parent.join(file_name);
-    let action = if destination.exists() {
+    let existing = match fs::symlink_metadata(&destination) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(AppError::InvalidSkillOutput {
+                path: destination.display().to_string(),
+                reason: "symlink",
+            });
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(AppError::InvalidSkillOutput {
+                path: destination.display().to_string(),
+                reason: "not_regular_file",
+            });
+        }
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => {
+            return Err(AppError::InvalidSkillOutput {
+                path: destination.display().to_string(),
+                reason: "metadata_unavailable",
+            });
+        }
+    };
+    let action = if let Some(metadata) = existing {
         let current = fs::read(&destination).map_err(|_| AppError::InvalidSkillOutput {
             path: destination.display().to_string(),
             reason: "unreadable",
@@ -34,12 +56,7 @@ pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, A
         if current == SKILL_BYTES {
             "unchanged"
         } else if force {
-            let permissions = fs::metadata(&destination)
-                .map_err(|_| AppError::InvalidSkillOutput {
-                    path: destination.display().to_string(),
-                    reason: "unreadable",
-                })?
-                .permissions();
+            let permissions = metadata.permissions();
             atomic_write(&destination, Some(permissions))?;
             "updated"
         } else {

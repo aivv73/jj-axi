@@ -1,5 +1,5 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{PermissionsExt as _, symlink};
 use std::process::Command;
 
 fn run(cwd: &std::path::Path, args: &[&str]) -> std::process::Output {
@@ -40,6 +40,58 @@ fn setup_skill_creates_exact_canonical_bytes_and_retries_unchanged() {
             .unwrap()
             .contains("action: unchanged")
     );
+}
+
+#[test]
+fn setup_skill_rejects_unsafe_destinations_and_missing_parents() {
+    let directory = tempfile::tempdir().unwrap();
+    let target = directory.path().join("target.md");
+    fs::write(&target, b"target").unwrap();
+    let link = directory.path().join("link.md");
+    symlink(&target, &link).unwrap();
+    let link_output = run(
+        directory.path(),
+        &[
+            "setup",
+            "skill",
+            "--output",
+            link.to_str().unwrap(),
+            "--force",
+        ],
+    );
+    assert!(!link_output.status.success());
+    assert!(
+        String::from_utf8(link_output.stdout)
+            .unwrap()
+            .contains("code: invalid_skill_output")
+    );
+    assert_eq!(fs::read(&target).unwrap(), b"target");
+
+    let destination_directory = directory.path().join("skill-dir");
+    fs::create_dir(&destination_directory).unwrap();
+    let directory_output = run(
+        directory.path(),
+        &[
+            "setup",
+            "skill",
+            "--output",
+            destination_directory.to_str().unwrap(),
+        ],
+    );
+    assert!(!directory_output.status.success());
+    assert!(
+        String::from_utf8(directory_output.stdout)
+            .unwrap()
+            .contains("code: invalid_skill_output")
+    );
+
+    let missing = directory.path().join("missing").join("SKILL.md");
+    let missing_output = run(
+        directory.path(),
+        &["setup", "skill", "--output", missing.to_str().unwrap()],
+    );
+    assert!(!missing_output.status.success());
+    assert!(!missing.parent().unwrap().exists());
 }
 
 #[test]
