@@ -82,6 +82,10 @@ pub enum CommandInput {
         number: u64,
         repository: Option<String>,
     },
+    SetupSkill {
+        output: String,
+        force: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -193,6 +197,20 @@ enum Command {
     Pr {
         #[command(subcommand)]
         command: PrCommand,
+    },
+    Setup {
+        #[command(subcommand)]
+        command: SetupCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SetupCommand {
+    Skill {
+        #[arg(long)]
+        output: String,
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -328,6 +346,9 @@ where
             Command::Pr {
                 command: PrCommand::Status { number, repository },
             } => CommandInput::PrStatus { number, repository },
+            Command::Setup {
+                command: SetupCommand::Skill { output, force },
+            } => CommandInput::SetupSkill { output, force },
         }),
         Err(error) if error.kind() == ErrorKind::DisplayHelp => ParsedCli::Help(error),
         Err(_) => ParsedCli::InvalidArgument {

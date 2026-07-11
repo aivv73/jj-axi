@@ -948,6 +948,31 @@ impl PrStatusData {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SetupSkillData {
+    pub output_path: String,
+    pub sha256: String,
+    pub bytes: u64,
+    pub action: String,
+}
+
+impl SetupSkillData {
+    pub fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            (
+                "skill",
+                ToonValue::Object(vec![
+                    ("name", string("jj-axi")),
+                    ("output_path", string(&self.output_path)),
+                    ("sha256", string(&self.sha256)),
+                    ("bytes", ToonValue::UInt(self.bytes)),
+                ]),
+            ),
+            ("action", string(&self.action)),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResponseKind {
     New,
     Describe,
@@ -967,6 +992,7 @@ pub enum ResponseKind {
     BookmarkSet,
     BookmarkPush,
     PrStatus,
+    SetupSkill,
 }
 
 impl ResponseKind {
@@ -990,6 +1016,7 @@ impl ResponseKind {
             Self::BookmarkSet => "bookmark_set",
             Self::BookmarkPush => "bookmark_push",
             Self::PrStatus => "pr_status",
+            Self::SetupSkill => "setup_skill",
         })
     }
 }
@@ -1014,6 +1041,7 @@ pub enum ResponseData {
     BookmarkSet(BookmarkSetData),
     BookmarkPush(BookmarkPushData),
     PrStatus(PrStatusData),
+    SetupSkill(SetupSkillData),
 }
 
 impl ResponseData {
@@ -1037,6 +1065,7 @@ impl ResponseData {
             Self::BookmarkSet(data) => data.to_toon_value(),
             Self::BookmarkPush(data) => data.to_toon_value(),
             Self::PrStatus(data) => data.to_toon_value(),
+            Self::SetupSkill(data) => data.to_toon_value(),
         }
     }
 }

@@ -7,6 +7,7 @@ use crate::error::AppError;
 use crate::github_bridge;
 use crate::jj_bridge::JjBridge;
 use crate::model::{Response, ResponseData, ResponseKind};
+use crate::setup;
 use crate::toon::{ToonValue, render};
 
 pub(crate) async fn run(parsed: ParsedCli, cwd: &Path) -> ExitCode {
@@ -30,6 +31,12 @@ pub(crate) async fn run(parsed: ParsedCli, cwd: &Path) -> ExitCode {
 }
 
 async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError> {
+    if let CommandInput::SetupSkill { output, force } = &command {
+        return Ok(Response {
+            kind: ResponseKind::SetupSkill,
+            data: ResponseData::SetupSkill(setup::setup_skill(output, *force)?),
+        });
+    }
     if let CommandInput::PrStatus { number, repository } = &command {
         let remote_urls = if repository.is_none() {
             JjBridge::git_remote_urls(cwd).await?
@@ -167,7 +174,8 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
         }),
         CommandInput::Operations { .. }
         | CommandInput::BookmarkList { .. }
-        | CommandInput::PrStatus { .. } => {
+        | CommandInput::PrStatus { .. }
+        | CommandInput::SetupSkill { .. } => {
             unreachable!("handled before repository synchronization")
         }
     }

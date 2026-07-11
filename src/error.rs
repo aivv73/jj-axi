@@ -202,6 +202,13 @@ pub enum AppError {
     },
     GithubResponseInvalid,
     GithubResponseTooLarge,
+    SkillOutputConflict {
+        path: String,
+    },
+    InvalidSkillOutput {
+        path: String,
+        reason: &'static str,
+    },
     Internal,
 }
 
@@ -445,6 +452,15 @@ impl AppError {
             Self::GithubResponseTooLarge => ToonValue::Object(vec![
                 ("code", string("github_response_too_large")),
                 ("retryable", ToonValue::Bool(false)),
+            ]),
+            Self::SkillOutputConflict { path } => ToonValue::Object(vec![
+                ("code", string("skill_output_conflict")),
+                ("path", string(path)),
+            ]),
+            Self::InvalidSkillOutput { path, reason } => ToonValue::Object(vec![
+                ("code", string("invalid_skill_output")),
+                ("path", string(path)),
+                ("reason", string(reason)),
             ]),
             Self::Internal => ToonValue::Object(vec![("code", string("internal"))]),
         }
