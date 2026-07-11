@@ -62,12 +62,13 @@ use crate::error::{
     RemoteBookmarkRejectReason, RewritabilityReason,
 };
 use crate::model::{
-    AbsorbData, AbsorbMove, AbsorbSourceAction, Change, CheckpointData, CurrentChange,
-    DescribeData, DescriptionAction, DiffData, DiffStat, DiffTarget, FinishData, FinishPublication,
-    HistoryChange, HunkRef, InspectData, LocalBookmarkAction, LogData, LogEntry, MoveData, NewData,
-    OperationEntry, OperationKind, OperationsData, Patch, RemoteBookmarkAction, ReorderData,
-    ShowData, SkippedPath, SplitData, Status, Truncation, UndoAction, UndoData, UndoSelection,
-    UndoTarget, UnmovedHunk,
+    AbsorbData, AbsorbMove, AbsorbSourceAction, BookmarkComparisonStatus, BookmarkEntry,
+    BookmarkListData, BookmarkRemoteState, BookmarkTargetState, Change, CheckpointData,
+    CurrentChange, DescribeData, DescriptionAction, DiffData, DiffStat, DiffTarget, FinishData,
+    FinishPublication, HistoryChange, HunkRef, InspectData, LocalBookmarkAction, LogData, LogEntry,
+    MoveData, NewData, OperationEntry, OperationKind, OperationsData, Patch, RemoteBookmarkAction,
+    ReorderData, ShowData, SkippedPath, SplitData, Status, Truncation, UndoAction, UndoData,
+    UndoSelection, UndoTarget, UnmovedHunk,
 };
 
 const DEFAULT_PATCH_LIMIT_BYTES: u64 = 16 * 1024;
@@ -120,49 +121,59 @@ pub(crate) struct JjBridge {
     repo: Arc<jj_lib::repo::ReadonlyRepo>,
 }
 
+async fn load_observational_workspace(
+    cwd: &Path,
+) -> Result<(Workspace, Vec<jj_lib::operation::Operation>), AppError> {
+    let cwd = std::fs::canonicalize(cwd).map_err(|_| AppError::RepositoryUnavailable {
+        operation: "resolve_working_directory",
+    })?;
+    let workspace_root = find_workspace_root(&cwd).ok_or_else(|| AppError::RepositoryNotFound {
+        path: cwd.display().to_string(),
+    })?;
+    let loader_factory = DefaultWorkspaceLoaderFactory;
+    let loader =
+        loader_factory
+            .create(&workspace_root)
+            .map_err(|_| AppError::RepositoryUnavailable {
+                operation: "discover_workspace",
+            })?;
+    let settings = load_settings(loader.as_ref())?;
+    let workspace = loader
+        .load(
+            &settings,
+            &StoreFactories::default(),
+            &default_working_copy_factories(),
+        )
+        .map_err(|_| AppError::RepositoryUnavailable {
+            operation: "load_workspace",
+        })?;
+    let repo_loader = workspace.repo_loader();
+    let head_ids = repo_loader
+        .op_heads_store()
+        .get_op_heads()
+        .await
+        .map_err(|_| AppError::BackendFailure {
+            operation: "read_operation_heads",
+        })?;
+    let mut heads = Vec::with_capacity(head_ids.len());
+    for id in head_ids {
+        heads.push(repo_loader.load_operation(&id).await.map_err(|_| {
+            AppError::BackendFailure {
+                operation: "read_operations",
+            }
+        })?);
+    }
+    Ok((workspace, heads))
+}
+
 impl JjBridge {
     /// Reads the operation DAG without snapshotting the working copy or reconciling heads.
     pub(crate) async fn operations(cwd: &Path, limit: usize) -> Result<OperationsData, AppError> {
-        let cwd = std::fs::canonicalize(cwd).map_err(|_| AppError::RepositoryUnavailable {
-            operation: "resolve_working_directory",
-        })?;
-        let workspace_root =
-            find_workspace_root(&cwd).ok_or_else(|| AppError::RepositoryNotFound {
-                path: cwd.display().to_string(),
-            })?;
-        let loader_factory = DefaultWorkspaceLoaderFactory;
-        let loader = loader_factory.create(&workspace_root).map_err(|_| {
-            AppError::RepositoryUnavailable {
-                operation: "discover_workspace",
-            }
-        })?;
-        let settings = load_settings(loader.as_ref())?;
-        let workspace = loader
-            .load(
-                &settings,
-                &StoreFactories::default(),
-                &default_working_copy_factories(),
-            )
-            .map_err(|_| AppError::RepositoryUnavailable {
-                operation: "load_workspace",
-            })?;
-        let repo_loader = workspace.repo_loader();
-        let head_ids = repo_loader
-            .op_heads_store()
-            .get_op_heads()
-            .await
-            .map_err(|_| AppError::BackendFailure {
-                operation: "read_operation_heads",
-            })?;
-        let head_set: HashSet<_> = head_ids.iter().cloned().collect();
-        let mut heads = Vec::with_capacity(head_ids.len());
-        for id in &head_ids {
-            heads.push(repo_loader.load_operation(id).await.map_err(|_| {
-                AppError::BackendFailure {
-                    operation: "read_operations",
-                }
-            })?);
-        }
+        let (_workspace, heads) = load_observational_workspace(cwd).await?;
+        let head_set: HashSet<_> = heads
+            .iter()
+            .map(|operation| operation.id().clone())
+            .collect();
         let operations = op_walk::walk_ancestors(&heads)
             .take(limit)
             .map(|result| {
@@ -189,6 +200,94 @@ impl JjBridge {
             .try_collect()
             .await?;
         Ok(OperationsData { operations })
+    }
+
+    /// Reads cached bookmark collaboration state without snapshotting or contacting remotes.
+    pub(crate) async fn bookmark_list(
+        cwd: &Path,
+        exact_name: Option<&str>,
+    ) -> Result<BookmarkListData, AppError> {
+        let (workspace, heads) = load_observational_workspace(cwd).await?;
+        if heads.len() != 1 {
+            let mut operation_ids: Vec<_> = heads.iter().map(|op| op.id().hex()).collect();
+            operation_ids.sort();
+            return Err(AppError::OperationHistoryDiverged { operation_ids });
+        }
+        let repo = workspace
+            .repo_loader()
+            .load_at(&heads[0])
+            .await
+            .map_err(|_| AppError::BackendFailure {
+                operation: "read_bookmarks",
+            })?;
+        let view = repo.view();
+        let mut names = BTreeSet::new();
+        for (name, _) in view.local_bookmarks() {
+            names.insert(name.as_str().to_owned());
+        }
+        for (symbol, remote_ref) in view.all_remote_bookmarks() {
+            if remote_ref.is_tracked() {
+                names.insert(symbol.name.as_str().to_owned());
+            }
+        }
+        if let Some(exact_name) = exact_name {
+            names.retain(|name| name == exact_name);
+        }
+        let remote_names =
+            git::get_all_remote_names(repo.store()).map_err(|_| AppError::BackendFailure {
+                operation: "read_bookmarks",
+            })?;
+        let mut bookmarks = Vec::new();
+        for name in names.into_iter().take(100) {
+            let ref_name = RefNameBuf::from(name.clone());
+            let local_target = view.get_local_bookmark(&ref_name);
+            let local = bookmark_target_state(repo.as_ref(), local_target).await?;
+            let mut remotes = Vec::new();
+            for remote in &remote_names {
+                let remote_ref = view.get_remote_bookmark(ref_name.to_remote_symbol(remote));
+                let remote_target = if remote_ref.is_tracked() {
+                    &remote_ref.target
+                } else {
+                    RefTarget::absent_ref()
+                };
+                let target = bookmark_target_state(repo.as_ref(), remote_target).await?;
+                let comparison_status = if local_target.is_absent() {
+                    BookmarkComparisonStatus::LocalMissing
+                } else if local_target.has_conflict() {
+                    BookmarkComparisonStatus::LocalConflicted
+                } else if remote_target.is_absent() {
+                    BookmarkComparisonStatus::RemoteMissing
+                } else if remote_target.has_conflict() {
+                    BookmarkComparisonStatus::RemoteConflicted
+                } else {
+                    BookmarkComparisonStatus::Available
+                };
+                let (ahead, behind) = if comparison_status == BookmarkComparisonStatus::Available {
+                    let local_id = local_target.as_normal().ok_or(AppError::Internal)?;
+                    let remote_id = remote_target.as_normal().ok_or(AppError::Internal)?;
+                    (
+                        Some(commit_difference_count(repo.as_ref(), local_id, remote_id).await?),
+                        Some(commit_difference_count(repo.as_ref(), remote_id, local_id).await?),
+                    )
+                } else {
+                    (None, None)
+                };
+                remotes.push(BookmarkRemoteState {
+                    remote: remote.as_str().to_owned(),
+                    tracking: remote_ref.is_tracked(),
+                    target,
+                    comparison_status,
+                    ahead,
+                    behind,
+                });
+            }
+            bookmarks.push(BookmarkEntry {
+                name,
+                local,
+                remotes,
+            });
+        }
+        Ok(BookmarkListData { bookmarks })
     }
 
     pub(crate) async fn open(cwd: &Path) -> Result<Self, AppError> {
@@ -2645,6 +2744,72 @@ fn compare_line_hunks(left: &LineHunk, right: &LineHunk) -> std::cmp::Ordering {
         .path
         .cmp(&right.reference.path)
         .then_with(|| hunk_range_key(left.range).cmp(&hunk_range_key(right.range)))
+}
+
+async fn commit_difference_count(
+    repo: &dyn jj_lib::repo::Repo,
+    head: &CommitId,
+    excluded_head: &CommitId,
+) -> Result<u64, AppError> {
+    let included = RevsetExpression::commits(vec![head.clone()]).ancestors();
+    let excluded = RevsetExpression::commits(vec![excluded_head.clone()]).ancestors();
+    let expression = included
+        .intersection(&excluded.negated())
+        .intersection(&RevsetExpression::root().negated());
+    let revset = expression
+        .evaluate(repo)
+        .map_err(|_| AppError::BackendFailure {
+            operation: "compare_bookmarks",
+        })?;
+    let mut stream = revset.stream();
+    let mut count = 0;
+    while stream
+        .try_next()
+        .await
+        .map_err(|_| AppError::BackendFailure {
+            operation: "compare_bookmarks",
+        })?
+        .is_some()
+    {
+        count += 1;
+    }
+    Ok(count)
+}
+
+async fn bookmark_target_state(
+    repo: &dyn jj_lib::repo::Repo,
+    target: &RefTarget,
+) -> Result<BookmarkTargetState, AppError> {
+    let mut added_change_ids = Vec::new();
+    for commit_id in target.added_ids() {
+        let commit = repo
+            .store()
+            .get_commit_async(commit_id)
+            .await
+            .map_err(|_| AppError::BackendFailure {
+                operation: "read_bookmarks",
+            })?;
+        added_change_ids.push(commit.change_id().to_string());
+    }
+    let mut removed_change_ids = Vec::new();
+    for commit_id in target.removed_ids() {
+        let commit = repo
+            .store()
+            .get_commit_async(commit_id)
+            .await
+            .map_err(|_| AppError::BackendFailure {
+                operation: "read_bookmarks",
+            })?;
+        removed_change_ids.push(commit.change_id().to_string());
+    }
+    added_change_ids.sort();
+    removed_change_ids.sort();
+    Ok(BookmarkTargetState {
+        present: target.is_present(),
+        conflicted: target.has_conflict(),
+        added_change_ids,
+        removed_change_ids,
+    })
 }
 
 fn compare_hunk_refs(left: &HunkRef, right: &HunkRef) -> std::cmp::Ordering {

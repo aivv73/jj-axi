@@ -721,6 +721,119 @@ impl UndoData {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BookmarkTargetState {
+    pub present: bool,
+    pub conflicted: bool,
+    pub added_change_ids: Vec<String>,
+    pub removed_change_ids: Vec<String>,
+}
+
+impl BookmarkTargetState {
+    fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("present", ToonValue::Bool(self.present)),
+            ("conflicted", ToonValue::Bool(self.conflicted)),
+            ("added_change_ids", string_array(&self.added_change_ids)),
+            ("removed_change_ids", string_array(&self.removed_change_ids)),
+        ])
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BookmarkComparisonStatus {
+    Available,
+    LocalMissing,
+    RemoteMissing,
+    LocalConflicted,
+    RemoteConflicted,
+}
+
+impl BookmarkComparisonStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::LocalMissing => "local_missing",
+            Self::RemoteMissing => "remote_missing",
+            Self::LocalConflicted => "local_conflicted",
+            Self::RemoteConflicted => "remote_conflicted",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BookmarkRemoteState {
+    pub remote: String,
+    pub tracking: bool,
+    pub target: BookmarkTargetState,
+    pub comparison_status: BookmarkComparisonStatus,
+    pub ahead: Option<u64>,
+    pub behind: Option<u64>,
+}
+
+impl BookmarkRemoteState {
+    fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("remote", string(&self.remote)),
+            ("tracking", ToonValue::Bool(self.tracking)),
+            ("target", self.target.to_toon_value()),
+            ("comparison_status", string(self.comparison_status.as_str())),
+            ("ahead", self.ahead.map_or(ToonValue::Null, ToonValue::UInt)),
+            (
+                "behind",
+                self.behind.map_or(ToonValue::Null, ToonValue::UInt),
+            ),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BookmarkEntry {
+    pub name: String,
+    pub local: BookmarkTargetState,
+    pub remotes: Vec<BookmarkRemoteState>,
+}
+
+impl BookmarkEntry {
+    fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("name", string(&self.name)),
+            ("local", self.local.to_toon_value()),
+            (
+                "remotes",
+                ToonValue::Array(
+                    self.remotes
+                        .iter()
+                        .map(BookmarkRemoteState::to_toon_value)
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BookmarkListData {
+    pub bookmarks: Vec<BookmarkEntry>,
+}
+
+impl BookmarkListData {
+    pub fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("remote_data_source", string("local_tracking_state")),
+            (
+                "bookmarks",
+                ToonValue::Array(
+                    self.bookmarks
+                        .iter()
+                        .map(BookmarkEntry::to_toon_value)
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResponseKind {
     New,
     Describe,
@@ -736,6 +849,7 @@ pub enum ResponseKind {
     Reorder,
     Operations,
     Undo,
+    BookmarkList,
 }
 
 impl ResponseKind {
@@ -755,6 +869,7 @@ impl ResponseKind {
             Self::Reorder => "reorder",
             Self::Operations => "operations",
             Self::Undo => "undo",
+            Self::BookmarkList => "bookmark_list",
         })
     }
 }
@@ -775,6 +890,7 @@ pub enum ResponseData {
     Reorder(ReorderData),
     Operations(OperationsData),
     Undo(UndoData),
+    BookmarkList(BookmarkListData),
 }
 
 impl ResponseData {
@@ -794,6 +910,7 @@ impl ResponseData {
             Self::Reorder(data) => data.to_toon_value(),
             Self::Operations(data) => data.to_toon_value(),
             Self::Undo(data) => data.to_toon_value(),
+            Self::BookmarkList(data) => data.to_toon_value(),
         }
     }
 }

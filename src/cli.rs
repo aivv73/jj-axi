@@ -64,6 +64,9 @@ pub enum CommandInput {
     Undo {
         to: Option<String>,
     },
+    BookmarkList {
+        name: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -168,6 +171,18 @@ enum Command {
         #[arg(long)]
         to: Option<String>,
     },
+    Bookmark {
+        #[command(subcommand)]
+        command: BookmarkCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum BookmarkCommand {
+    List {
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 pub fn parse<I, T>(args: I) -> ParsedCli
@@ -239,6 +254,9 @@ where
             },
             Command::Operations { limit } => CommandInput::Operations { limit },
             Command::Undo { to } => CommandInput::Undo { to },
+            Command::Bookmark {
+                command: BookmarkCommand::List { name },
+            } => CommandInput::BookmarkList { name },
         }),
         Err(error) if error.kind() == ErrorKind::DisplayHelp => ParsedCli::Help(error),
         Err(_) => ParsedCli::InvalidArgument {

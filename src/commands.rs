@@ -35,6 +35,12 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
             data: ResponseData::Operations(JjBridge::operations(cwd, limit).await?),
         });
     }
+    if let CommandInput::BookmarkList { name } = &command {
+        return Ok(Response {
+            kind: ResponseKind::BookmarkList,
+            data: ResponseData::BookmarkList(JjBridge::bookmark_list(cwd, name.as_deref()).await?),
+        });
+    }
     let undo_source_ids = if matches!(&command, CommandInput::Undo { .. }) {
         let operation_data = JjBridge::operations(cwd, usize::MAX).await?;
         let mut operation_ids: Vec<_> = operation_data
@@ -126,7 +132,7 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
                     .await?,
             ),
         }),
-        CommandInput::Operations { .. } => {
+        CommandInput::Operations { .. } | CommandInput::BookmarkList { .. } => {
             unreachable!("handled before repository synchronization")
         }
     }

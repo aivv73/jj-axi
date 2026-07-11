@@ -1,8 +1,37 @@
 mod common;
 
 use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 use common::{repository, run_jj, successful_output};
+
+fn add_bare_origin(directory: &Path) -> tempfile::TempDir {
+    let remote = tempfile::tempdir().unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "--bare", "."])
+            .current_dir(remote.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        run_jj(
+            directory,
+            &[
+                "git",
+                "remote",
+                "add",
+                "origin",
+                remote.path().to_str().unwrap(),
+            ],
+        )
+        .status
+        .success()
+    );
+    remote
+}
 
 #[test]
 fn operations_is_read_only_and_exposes_topology_and_policy() {
@@ -60,6 +89,86 @@ fn bare_undo_reverts_latest_mutation_but_preserves_newer_file_content() {
         fs::read_to_string(repo.path().join("file")).unwrap(),
         "two\n"
     );
+}
+
+#[test]
+fn bookmark_list_exposes_cached_local_state_without_mutating_operations() {
+    let repo = repository();
+    assert!(
+        run_jj(repo.path(), &["describe", "-m", "listed"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(repo.path(), &["bookmark", "set", "feature", "-r", "@"])
+            .status
+            .success()
+    );
+    let before = run_jj(
+        repo.path(),
+        &["op", "log", "--no-graph", "-n", "1", "-T", "id"],
+    );
+
+    let output = successful_output(repo.path(), &["bookmark", "list", "--name", "feature"]);
+
+    assert!(output.contains("kind: bookmark_list"));
+    assert!(output.contains("remote_data_source: local_tracking_state"));
+    assert!(output.contains("name: feature"));
+    assert!(output.contains("local:"));
+    assert!(output.contains("present: true"));
+    assert!(output.contains("conflicted: false"));
+    assert!(output.contains("added_change_ids[1]"));
+    assert!(output.contains("removed_change_ids: []"));
+    assert!(output.contains("remotes: []"));
+    let missing = successful_output(repo.path(), &["bookmark", "list", "--name", "missing"]);
+    assert!(missing.contains("bookmarks: []"));
+
+    let after = run_jj(
+        repo.path(),
+        &["op", "log", "--no-graph", "-n", "1", "-T", "id"],
+    );
+    assert_eq!(before.stdout, after.stdout);
+}
+
+#[test]
+fn bookmark_list_computes_cached_commit_topology_against_remote() {
+    let repo = repository();
+    let _remote = add_bare_origin(repo.path());
+    assert!(
+        run_jj(repo.path(), &["describe", "-m", "published"])
+            .status
+            .success()
+    );
+    successful_output(repo.path(), &["finish", "@", "--bookmark", "feature"]);
+    assert!(
+        run_jj(repo.path(), &["new", "-m", "local"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(repo.path(), &["bookmark", "set", "feature", "-r", "@"])
+            .status
+            .success()
+    );
+
+    let output = successful_output(repo.path(), &["bookmark", "list", "--name", "feature"]);
+
+    assert!(output.contains("remote: origin"));
+    assert!(output.contains("tracking: true"));
+    assert!(output.contains("comparison_status: available"));
+    assert!(output.contains("ahead: 1"));
+    assert!(output.contains("behind: 0"));
+
+    assert!(
+        run_jj(repo.path(), &["bookmark", "delete", "feature"])
+            .status
+            .success()
+    );
+    let remote_only = successful_output(repo.path(), &["bookmark", "list", "--name", "feature"]);
+    assert!(remote_only.contains("name: feature"));
+    assert!(remote_only.contains("comparison_status: local_missing"));
+    assert!(remote_only.contains("ahead: null"));
+    assert!(remote_only.contains("behind: null"));
 }
 
 #[test]
