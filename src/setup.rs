@@ -5,7 +5,7 @@ use std::path::Path;
 use sha2::{Digest as _, Sha256};
 
 use crate::error::AppError;
-use crate::model::SetupSkillData;
+use crate::model::{SetupSkillAction, SetupSkillData};
 
 pub(crate) const SKILL_BYTES: &[u8] = include_bytes!("../skills/jj-axi/SKILL.md");
 
@@ -54,11 +54,11 @@ pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, A
             reason: "unreadable",
         })?;
         if current == SKILL_BYTES {
-            "unchanged"
+            SetupSkillAction::Unchanged
         } else if force {
             let permissions = metadata.permissions();
             atomic_write(&destination, Some(permissions))?;
-            "updated"
+            SetupSkillAction::Updated
         } else {
             return Err(AppError::SkillOutputConflict {
                 path: destination.display().to_string(),
@@ -66,14 +66,14 @@ pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, A
         }
     } else {
         atomic_write(&destination, None)?;
-        "created"
+        SetupSkillAction::Created
     };
     let sha256 = format!("{:x}", Sha256::digest(SKILL_BYTES));
     Ok(SetupSkillData {
         output_path: destination.display().to_string(),
         sha256,
         bytes: SKILL_BYTES.len() as u64,
-        action: action.to_owned(),
+        action,
     })
 }
 

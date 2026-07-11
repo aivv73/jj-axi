@@ -947,12 +947,29 @@ impl PrStatusData {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SetupSkillAction {
+    Created,
+    Updated,
+    Unchanged,
+}
+
+impl SetupSkillAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Updated => "updated",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SetupSkillData {
     pub output_path: String,
     pub sha256: String,
     pub bytes: u64,
-    pub action: String,
+    pub action: SetupSkillAction,
 }
 
 impl SetupSkillData {
@@ -967,7 +984,7 @@ impl SetupSkillData {
                     ("bytes", ToonValue::UInt(self.bytes)),
                 ]),
             ),
-            ("action", string(&self.action)),
+            ("action", string(self.action.as_str())),
         ])
     }
 }
