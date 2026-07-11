@@ -63,12 +63,12 @@ use crate::error::{
 };
 use crate::model::{
     AbsorbData, AbsorbMove, AbsorbSourceAction, BookmarkComparisonStatus, BookmarkEntry,
-    BookmarkListData, BookmarkRemoteState, BookmarkTargetState, Change, CheckpointData,
-    CurrentChange, DescribeData, DescriptionAction, DiffData, DiffStat, DiffTarget, FinishData,
-    FinishPublication, HistoryChange, HunkRef, InspectData, LocalBookmarkAction, LogData, LogEntry,
-    MoveData, NewData, OperationEntry, OperationKind, OperationsData, Patch, RemoteBookmarkAction,
-    ReorderData, ShowData, SkippedPath, SplitData, Status, Truncation, UndoAction, UndoData,
-    UndoSelection, UndoTarget, UnmovedHunk,
+    BookmarkListData, BookmarkRemoteState, BookmarkSetData, BookmarkTargetState, Change,
+    CheckpointData, CurrentChange, DescribeData, DescriptionAction, DiffData, DiffStat, DiffTarget,
+    FinishData, FinishPublication, HistoryChange, HunkRef, InspectData, LocalBookmarkAction,
+    LogData, LogEntry, MoveData, NewData, OperationEntry, OperationKind, OperationsData, Patch,
+    RemoteBookmarkAction, ReorderData, ShowData, SkippedPath, SplitData, Status, Truncation,
+    UndoAction, UndoData, UndoSelection, UndoTarget, UnmovedHunk,
 };
 
 const DEFAULT_PATCH_LIMIT_BYTES: u64 = 16 * 1024;
@@ -772,6 +772,62 @@ impl JjBridge {
         Ok(CheckpointData {
             checkpoint,
             current_change: change_from_commit(&current),
+        })
+    }
+
+    pub(crate) async fn set_bookmark(
+        &mut self,
+        bookmark: &str,
+        revision: &str,
+        allow_backwards: bool,
+    ) -> Result<BookmarkSetData, AppError> {
+        let name = parse_bookmark_name(bookmark).map_err(|_| AppError::InvalidArgument {
+            argument: "bookmark",
+            constraint: "valid_bookmark_name",
+        })?;
+        let target = self.resolve_one(revision).await?;
+        let old_target = self.repo.view().get_local_bookmark(&name);
+        let new_target = RefTarget::normal(target.id().clone());
+        let action = if old_target.is_absent() {
+            LocalBookmarkAction::Created
+        } else if old_target == &new_target {
+            LocalBookmarkAction::Unchanged
+        } else if allow_backwards
+            || old_target.added_ids().any(|old_id| {
+                self.repo
+                    .index()
+                    .is_ancestor(old_id, target.id())
+                    .unwrap_or(false)
+            })
+        {
+            LocalBookmarkAction::Moved
+        } else {
+            return Err(AppError::BookmarkMoveRejected {
+                bookmark: name.as_str().to_owned(),
+                change_id: target.change_id().to_string(),
+            });
+        };
+
+        if action != LocalBookmarkAction::Unchanged {
+            let mut tx = self.start_transaction("bookmark set");
+            tx.repo_mut().set_local_bookmark_target(&name, new_target);
+            self.finish_transaction(
+                tx,
+                "bookmark_set",
+                format!(
+                    "set bookmark {} to commit {}",
+                    name.as_str(),
+                    target.id().hex()
+                ),
+            )
+            .await?;
+        }
+
+        Ok(BookmarkSetData {
+            name: name.as_str().to_owned(),
+            target_change_id: target.change_id().to_string(),
+            target_commit_id: target.id().hex(),
+            action,
         })
     }
 

@@ -69,6 +69,11 @@ pub enum CommandInput {
         after: Option<String>,
         name: Option<String>,
     },
+    BookmarkSet {
+        name: String,
+        target: String,
+        allow_backwards: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -189,6 +194,13 @@ enum BookmarkCommand {
         #[arg(long)]
         name: Option<String>,
     },
+    Set {
+        name: String,
+        #[arg(long = "to")]
+        target: String,
+        #[arg(long = "allow-backwards")]
+        allow_backwards: bool,
+    },
 }
 
 pub fn parse<I, T>(args: I) -> ParsedCli
@@ -271,6 +283,18 @@ where
                 }
                 CommandInput::BookmarkList { limit, after, name }
             }
+            Command::Bookmark {
+                command:
+                    BookmarkCommand::Set {
+                        name,
+                        target,
+                        allow_backwards,
+                    },
+            } => CommandInput::BookmarkSet {
+                name,
+                target,
+                allow_backwards,
+            },
         }),
         Err(error) if error.kind() == ErrorKind::DisplayHelp => ParsedCli::Help(error),
         Err(_) => ParsedCli::InvalidArgument {

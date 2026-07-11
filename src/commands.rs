@@ -126,6 +126,16 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
             kind: ResponseKind::Reorder,
             data: ResponseData::Reorder(bridge.reorder(&sequence).await?),
         }),
+        CommandInput::BookmarkSet {
+            name,
+            target,
+            allow_backwards,
+        } => Ok(Response {
+            kind: ResponseKind::BookmarkSet,
+            data: ResponseData::BookmarkSet(
+                bridge.set_bookmark(&name, &target, allow_backwards).await?,
+            ),
+        }),
         CommandInput::Undo { to } => Ok(Response {
             kind: ResponseKind::Undo,
             data: ResponseData::Undo(

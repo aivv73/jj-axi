@@ -209,6 +209,44 @@ fn bookmark_list_computes_cached_commit_topology_against_remote() {
 }
 
 #[test]
+fn bookmark_set_is_safe_idempotent_and_supports_explicit_backward_moves() {
+    let repo = repository();
+    assert!(
+        run_jj(repo.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+
+    let created = successful_output(repo.path(), &["bookmark", "set", "main", "--to", "@"]);
+    assert!(created.contains("kind: bookmark_set"));
+    assert!(created.contains("name: main"));
+    assert!(created.contains("action: created"));
+    assert!(created.contains("target_change_id:"));
+    assert!(created.contains("target_commit_id:"));
+
+    let unchanged = successful_output(repo.path(), &["bookmark", "set", "main", "--to", "@"]);
+    assert!(unchanged.contains("action: unchanged"));
+
+    assert!(
+        run_jj(repo.path(), &["new", "-m", "child"])
+            .status
+            .success()
+    );
+    let moved = successful_output(repo.path(), &["bookmark", "set", "main", "--to", "@"]);
+    assert!(moved.contains("action: moved"));
+
+    common::assert_error(
+        common::run_axi(repo.path(), &["bookmark", "set", "main", "--to", "@-"]),
+        "bookmark_move_rejected",
+    );
+    let backwards = successful_output(
+        repo.path(),
+        &["bookmark", "set", "main", "--to", "@-", "--allow-backwards"],
+    );
+    assert!(backwards.contains("action: moved"));
+}
+
+#[test]
 fn explicit_current_operation_is_idempotent() {
     let repo = repository();
     let output = successful_output(repo.path(), &["operations", "--limit", "1"]);
