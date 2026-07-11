@@ -67,7 +67,7 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 | Command | Wraps | Notes |
 |---|---|---|
 | `setup hooks [--agent claude-code\|codex\|opencode]` | — | Session integration per AXI principle 7. Idempotent install. |
-| `setup skill` | — | Generates `SKILL.md` from `inspect`'s home-view content. See §4. |
+| `setup skill --output <path> [--force]` | — | Atomically materializes the embedded canonical `skills/jj-axi/SKILL.md`; idempotent for identical bytes and protective of differing or non-regular destinations. |
 
 ## 2. Open design questions
 
@@ -75,7 +75,7 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 2. **jj-lib API stability.** jj-lib is not a stable, versioned public API in the way the `jj` CLI's UX is. Need to pin target jj version(s) and decide how much abstraction insulates jj-axi from upstream breakage.
 3. **Scope of `validate`.** What invariants does this actually check that `inspect` and `undo` don't already surface? If the answer is "nothing new," cut the command rather than ship a placeholder.
 4. **Resolved `finish` composite boundary.** `--message` is optional; when omitted, the stored description must be non-empty. Without `--bookmark`, finish applies the optional message and returns readiness-only success without private finished metadata. With `--bookmark`, finish creates or fast-forwards only that exact name and pushes only that name. The remote is `git.push`, otherwise the sole configured remote, otherwise `origin`; no name or remote is inferred from tracking. Description and bookmark updates are one local operation retained when push fails, which returns a structured partial result.
-5. **Non-JS skill distribution.** `npx skills add <owner>/<repo>` assumes a resolvable npm entry point. jj-axi is a native Rust binary — `setup skill` needs either a thin npm wrapper shelling to a prebuilt binary, or a documented `cargo install`/`cargo binstall` path referenced from the skill's own install instructions.
+5. **Resolved skill distribution.** The canonical artifact lives at `skills/jj-axi/SKILL.md`, where GitHub-based skill tooling can discover it directly. The native binary embeds those exact bytes and `setup skill` copies them to an explicit destination; jj-axi does not invoke npm, npx, or agent-specific installers.
 6. **Agent-native fetch.** `bookmark list` deliberately reads cached local tracking state and never contacts remotes. A future top-level `fetch [--remote]` command should refresh repository-wide collaboration state, but its network, authentication, multi-remote, and partial-result contracts must be designed before implementation; it is not part of the bookmark slice.
 
 ## 3. Licensing position
@@ -86,13 +86,14 @@ jj-axi is written from scratch under MIT/Apache-2.0. It draws on:
 - **GitButler's documented AI-agent UX concepts** (docs.gitbutler.com/ai-agents) — ideas and workflow concepts only. No GitButler source code is used or derived from. GitButler's code is under FSL-1.1-MIT, whose Competing Use clause prohibits building a "same or substantially similar functionality" product *from their code*; jj-axi avoids this by not touching their codebase and not reproducing their documentation text verbatim.
 - **gh-axi** (MIT) — reference implementation pattern (session hook + skill dual distribution), reimplemented independently in Rust.
 - **gitsheets-axi** (Apache-2.0) — idempotent-commit convention as a design reference, not a code dependency (different domain: git-as-data-store, not VCS history editing).
+- **onevcat-jj skill** (no license found) — topic coverage was reviewed as product research only. jj-axi's skill text, examples, structure, and frontmatter are independently authored; no prose or other copyrightable content is copied or adapted.
 
-No code dependency on any non-compete-licensed project.
+No code or content dependency on any non-compete-licensed or unlicensed project.
 
 ## 4. Distribution
 
 - Standalone Rust binary, installable via `cargo install` (later `cargo binstall` for prebuilt binaries).
-- `setup skill` generates `SKILL.md` from the `inspect` home-view content (single source of truth), distributed via the standard `skills` CLI (`npx skills add <owner>/jj-axi --skill jj-axi`) — the mechanism used by gh-axi and indexed by both the AXI catalog and Vercel's skills.sh directory.
+- `skills/jj-axi/SKILL.md` is the single canonical skill document and is distributed directly through the standard `skills` CLI (`npx skills add <owner>/jj-axi --skill jj-axi`). The native `setup skill` command embeds and atomically materializes the same bytes without invoking JavaScript tooling.
 - `setup hooks` installs SessionStart hooks for Claude Code, Codex, and OpenCode per AXI principle 7.
 
 ## 5. Success metrics
