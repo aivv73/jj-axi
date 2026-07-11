@@ -131,6 +131,43 @@ fn bookmark_list_exposes_cached_local_state_without_mutating_operations() {
 }
 
 #[test]
+fn bookmark_list_pages_grouped_names_with_an_exclusive_cursor() {
+    let repo = repository();
+    for name in ["alpha", "beta", "gamma"] {
+        assert!(
+            run_jj(repo.path(), &["bookmark", "set", name, "-r", "@"])
+                .status
+                .success()
+        );
+    }
+
+    let first = successful_output(repo.path(), &["bookmark", "list", "--limit", "2"]);
+    assert!(first.contains("name: alpha"));
+    assert!(first.contains("name: beta"));
+    assert!(!first.contains("name: gamma"));
+    assert!(first.contains("truncated: true"));
+    assert!(first.contains("next_after: beta"));
+
+    let second = successful_output(
+        repo.path(),
+        &["bookmark", "list", "--limit", "2", "--after", "beta"],
+    );
+    assert!(!second.contains("name: alpha"));
+    assert!(!second.contains("name: beta"));
+    assert!(second.contains("name: gamma"));
+    assert!(second.contains("truncated: false"));
+    assert!(second.contains("next_after: null"));
+
+    common::assert_error(
+        common::run_axi(
+            repo.path(),
+            &["bookmark", "list", "--name", "alpha", "--after", "beta"],
+        ),
+        "invalid_argument",
+    );
+}
+
+#[test]
 fn bookmark_list_computes_cached_commit_topology_against_remote() {
     let repo = repository();
     let _remote = add_bare_origin(repo.path());

@@ -65,6 +65,8 @@ pub enum CommandInput {
         to: Option<String>,
     },
     BookmarkList {
+        limit: usize,
+        after: Option<String>,
         name: Option<String>,
     },
 }
@@ -180,6 +182,10 @@ enum Command {
 #[derive(Subcommand)]
 enum BookmarkCommand {
     List {
+        #[arg(long, default_value_t = 100, value_parser = parse_limit)]
+        limit: usize,
+        #[arg(long)]
+        after: Option<String>,
         #[arg(long)]
         name: Option<String>,
     },
@@ -255,8 +261,16 @@ where
             Command::Operations { limit } => CommandInput::Operations { limit },
             Command::Undo { to } => CommandInput::Undo { to },
             Command::Bookmark {
-                command: BookmarkCommand::List { name },
-            } => CommandInput::BookmarkList { name },
+                command: BookmarkCommand::List { limit, after, name },
+            } => {
+                if after.is_some() && name.is_some() {
+                    return ParsedCli::InvalidArgument {
+                        argument: "after",
+                        constraint: "cannot_combine_with_name",
+                    };
+                }
+                CommandInput::BookmarkList { limit, after, name }
+            }
         }),
         Err(error) if error.kind() == ErrorKind::DisplayHelp => ParsedCli::Help(error),
         Err(_) => ParsedCli::InvalidArgument {

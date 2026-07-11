@@ -814,6 +814,8 @@ impl BookmarkEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BookmarkListData {
     pub bookmarks: Vec<BookmarkEntry>,
+    pub truncated: bool,
+    pub next_after: Option<String>,
 }
 
 impl BookmarkListData {
@@ -828,6 +830,13 @@ impl BookmarkListData {
                         .map(BookmarkEntry::to_toon_value)
                         .collect(),
                 ),
+            ),
+            ("truncated", ToonValue::Bool(self.truncated)),
+            (
+                "next_after",
+                self.next_after
+                    .as_ref()
+                    .map_or(ToonValue::Null, |name| string(name)),
             ),
         ])
     }

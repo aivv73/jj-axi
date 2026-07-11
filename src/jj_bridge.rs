@@ -205,6 +205,8 @@ impl JjBridge {
     /// Reads cached bookmark collaboration state without snapshotting or contacting remotes.
     pub(crate) async fn bookmark_list(
         cwd: &Path,
+        limit: usize,
+        after: Option<&str>,
         exact_name: Option<&str>,
     ) -> Result<BookmarkListData, AppError> {
         let (workspace, heads) = load_observational_workspace(cwd).await?;
@@ -233,12 +235,20 @@ impl JjBridge {
         if let Some(exact_name) = exact_name {
             names.retain(|name| name == exact_name);
         }
+        if let Some(after) = after {
+            names.retain(|name| name.as_str() > after);
+        }
+        let mut page_names: Vec<_> = names.into_iter().take(limit + 1).collect();
+        let truncated = page_names.len() > limit;
+        if truncated {
+            page_names.pop();
+        }
         let remote_names =
             git::get_all_remote_names(repo.store()).map_err(|_| AppError::BackendFailure {
                 operation: "read_bookmarks",
             })?;
         let mut bookmarks = Vec::new();
-        for name in names.into_iter().take(100) {
+        for name in page_names {
             let ref_name = RefNameBuf::from(name.clone());
             let local_target = view.get_local_bookmark(&ref_name);
             let local = bookmark_target_state(repo.as_ref(), local_target).await?;
@@ -287,7 +297,14 @@ impl JjBridge {
                 remotes,
             });
         }
-        Ok(BookmarkListData { bookmarks })
+        let next_after = truncated
+            .then(|| bookmarks.last().map(|bookmark| bookmark.name.clone()))
+            .flatten();
+        Ok(BookmarkListData {
+            bookmarks,
+            truncated,
+            next_after,
+        })
     }
 
     pub(crate) async fn open(cwd: &Path) -> Result<Self, AppError> {

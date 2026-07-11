@@ -35,10 +35,12 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
             data: ResponseData::Operations(JjBridge::operations(cwd, limit).await?),
         });
     }
-    if let CommandInput::BookmarkList { name } = &command {
+    if let CommandInput::BookmarkList { limit, after, name } = &command {
         return Ok(Response {
             kind: ResponseKind::BookmarkList,
-            data: ResponseData::BookmarkList(JjBridge::bookmark_list(cwd, name.as_deref()).await?),
+            data: ResponseData::BookmarkList(
+                JjBridge::bookmark_list(cwd, *limit, after.as_deref(), name.as_deref()).await?,
+            ),
         });
     }
     let undo_source_ids = if matches!(&command, CommandInput::Undo { .. }) {
