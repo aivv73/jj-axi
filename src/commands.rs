@@ -31,12 +31,18 @@ pub(crate) async fn run(parsed: ParsedCli, cwd: &Path) -> ExitCode {
 
 async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError> {
     if let CommandInput::PrStatus { number, repository } = &command {
+        let remote_urls = if repository.is_none() {
+            JjBridge::git_remote_urls(cwd).await?
+        } else {
+            Vec::new()
+        };
         return Ok(Response {
             kind: ResponseKind::PrStatus,
             data: ResponseData::PrStatus(github_bridge::pr_status(
                 cwd,
                 *number,
                 repository.as_deref(),
+                &remote_urls,
             )?),
         });
     }

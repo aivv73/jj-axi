@@ -167,6 +167,34 @@ async fn load_observational_workspace(
 }
 
 impl JjBridge {
+    pub(crate) async fn git_remote_urls(cwd: &Path) -> Result<Vec<String>, AppError> {
+        let (workspace, heads) = load_observational_workspace(cwd).await?;
+        let operation = heads.first().ok_or(AppError::BackendFailure {
+            operation: "read_git_remotes",
+        })?;
+        let repo = workspace
+            .repo_loader()
+            .load_at(operation)
+            .await
+            .map_err(|_| AppError::BackendFailure {
+                operation: "read_git_remotes",
+            })?;
+        let git_repo = git::get_git_repo(repo.store()).map_err(|_| AppError::BackendFailure {
+            operation: "read_git_remotes",
+        })?;
+        let mut urls = Vec::new();
+        for name in git_repo.remote_names() {
+            if let Some(Ok(remote)) = git_repo.try_find_remote(name.as_ref()) {
+                if let Some(url) = remote.url(gix::remote::Direction::Fetch) {
+                    urls.push(url.to_bstring().to_string());
+                }
+            }
+        }
+        urls.sort();
+        urls.dedup();
+        Ok(urls)
+    }
+
     /// Reads the operation DAG without snapshotting the working copy or reconciling heads.
     pub(crate) async fn operations(cwd: &Path, limit: usize) -> Result<OperationsData, AppError> {
         let (_workspace, heads) = load_observational_workspace(cwd).await?;

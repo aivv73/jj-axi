@@ -8,7 +8,7 @@ use crate::model::{PrChecks, PrStatusData};
 
 const QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft mergeable reviewDecision headRefName headRefOid baseRefName commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ... on CheckRun{status conclusion} ... on StatusContext{state}} pageInfo{hasNextPage endCursor}}}}}}}}}";
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct RepositoryIdentity {
     host: String,
     owner: String,
@@ -46,12 +46,28 @@ pub(crate) fn pr_status(
     _cwd: &Path,
     number: u64,
     repository: Option<&str>,
+    remote_urls: &[String],
 ) -> Result<PrStatusData, AppError> {
-    let repository = repository.ok_or(AppError::InvalidArgument {
-        argument: "repo",
-        constraint: "required_until_repository_inference",
-    })?;
-    let identity = RepositoryIdentity::parse(repository)?;
+    let identity = if let Some(repository) = repository {
+        RepositoryIdentity::parse(repository)?
+    } else {
+        let mut identities: Vec<_> = remote_urls
+            .iter()
+            .filter_map(|url| identity_from_remote(url))
+            .collect();
+        identities.sort();
+        identities.dedup();
+        match identities.as_slice() {
+            [] => return Err(AppError::GithubRepositoryNotFound),
+            [identity] => identity.clone(),
+            _ => {
+                let mut candidates: Vec<_> =
+                    identities.iter().map(RepositoryIdentity::display).collect();
+                candidates.truncate(3);
+                return Err(AppError::GithubRepositoryAmbiguous { candidates });
+            }
+        }
+    };
     let mut command = Command::new("gh");
     command
         .args(["api", "graphql", "-f", &format!("query={QUERY}")])
@@ -185,6 +201,35 @@ pub(crate) fn pr_status(
         checks,
         ready_to_merge,
         blocking_reasons,
+    })
+}
+
+fn identity_from_remote(url: &str) -> Option<RepositoryIdentity> {
+    let (host, path) = if let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    {
+        rest.split_once('/')?
+    } else if let Some(rest) = url.strip_prefix("ssh://") {
+        let rest = rest.split_once('@').map_or(rest, |(_, value)| value);
+        rest.split_once('/')?
+    } else {
+        let rest = url.split_once('@').map_or(url, |(_, value)| value);
+        rest.split_once(':')?
+    };
+    if host != "github.com" && !host.to_ascii_lowercase().contains("github") {
+        return None;
+    }
+    let mut parts = path.trim_matches('/').split('/');
+    let owner = parts.next()?;
+    let name = parts.next()?.trim_end_matches(".git");
+    if owner.is_empty() || name.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    Some(RepositoryIdentity {
+        host: host.to_owned(),
+        owner: owner.to_owned(),
+        name: name.to_owned(),
     })
 }
 

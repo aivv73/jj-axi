@@ -1951,6 +1951,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "gix",
  "jj-cli",
  "jj-lib",
  "serde_json",

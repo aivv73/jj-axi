@@ -187,6 +187,10 @@ pub enum AppError {
         operation_id: String,
         reason: &'static str,
     },
+    GithubRepositoryNotFound,
+    GithubRepositoryAmbiguous {
+        candidates: Vec<String>,
+    },
     GithubCliNotFound,
     GithubApiUnavailable {
         retryable: bool,
@@ -394,6 +398,18 @@ impl AppError {
                 ("code", string("operation_target_unsafe")),
                 ("operation_id", string(operation_id)),
                 ("reason", string(reason)),
+            ]),
+            Self::GithubRepositoryNotFound => ToonValue::Object(vec![
+                ("code", string("github_repository_not_found")),
+                ("retryable", ToonValue::Bool(false)),
+            ]),
+            Self::GithubRepositoryAmbiguous { candidates } => ToonValue::Object(vec![
+                ("code", string("github_repository_ambiguous")),
+                ("retryable", ToonValue::Bool(false)),
+                (
+                    "candidates",
+                    ToonValue::Array(candidates.iter().map(|value| string(value)).collect()),
+                ),
             ]),
             Self::GithubCliNotFound => ToonValue::Object(vec![
                 ("code", string("github_cli_not_found")),

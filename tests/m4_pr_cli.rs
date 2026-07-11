@@ -38,6 +38,8 @@ fn run_with_gh(repo: &Path, gh: &Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
+const READY_JSON: &str = r#"{"data":{"repository":{"pullRequest":{"number":7,"url":"https://github.com/acme/project/pull/7","state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"APPROVED","headRefName":"feature","headRefOid":"abc123","baseRefName":"main","commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}]}}}}}"#;
+
 #[test]
 fn explicit_pr_status_derives_readiness_and_check_counts() {
     let repo = repository();
@@ -65,4 +67,35 @@ fn explicit_pr_status_derives_readiness_and_check_counts() {
     assert!(text.contains("status: pending"));
     assert!(text.contains("ready_to_merge: false"));
     assert!(text.contains("blocking_reasons[1]: checks_pending"));
+}
+
+#[test]
+fn pr_status_infers_a_unique_github_remote_identity() {
+    let repo = repository();
+    assert!(
+        common::run_jj(
+            repo.path(),
+            &[
+                "git",
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:acme/project.git"
+            ],
+        )
+        .status
+        .success()
+    );
+    let gh = fake_gh(READY_JSON);
+    let output = run_with_gh(repo.path(), gh.path(), &["pr", "status", "7"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("repository: github.com/acme/project")
+    );
 }
