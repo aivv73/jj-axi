@@ -58,8 +58,8 @@ use similar::{ChangeTag, TextDiff};
 
 use crate::cli::{HunkRange, HunkSpec, LogField};
 use crate::error::{
-    AppError, FinishPartialReason, FinishRemoteState, ReadinessReason, RemoteBookmarkRejectReason,
-    RewritabilityReason,
+    AppError, PublicationFailureReason, PublicationRemoteState, ReadinessReason,
+    RemoteBookmarkRejectReason, RewritabilityReason,
 };
 use crate::model::{
     AbsorbData, AbsorbMove, AbsorbSourceAction, Change, CheckpointData, CurrentChange,
@@ -718,20 +718,8 @@ impl JjBridge {
                 RefTarget::normal(final_target_id.clone()),
             );
 
-            let known_heads = tx
-                .repo()
-                .view()
-                .remote_bookmarks(&context.remote)
-                .flat_map(|(_, remote_ref)| remote_ref.target.added_ids().cloned())
-                .collect();
-            self.ensure_ready(tx.repo(), known_heads, &final_target_id)
+            self.validate_publication(tx.repo(), &context.name, &context.remote, &final_target_id)
                 .await?;
-            self.preflight_remote_bookmark(
-                tx.repo(),
-                &context.name,
-                &context.remote,
-                &change_id_string,
-            )?;
 
             self.finish_transaction(tx, "finish", format!("finish change {change_id_string}"))
                 .await?;
@@ -1770,16 +1758,7 @@ impl JjBridge {
             argument: "bookmark",
             constraint: "valid_bookmark_name",
         })?;
-        let remote = self.select_push_remote()?;
-        let remote_names =
-            git::get_all_remote_names(self.repo.store()).map_err(|_| AppError::BackendFailure {
-                operation: "finish",
-            })?;
-        if !remote_names.contains(&remote) {
-            return Err(AppError::RemoteNotFound {
-                remote: remote.as_str().to_owned(),
-            });
-        }
+        let remote = self.select_publication_remote(None)?;
         let old_local_target = self.repo.view().get_local_bookmark(&name).clone();
 
         if old_local_target.is_present()
@@ -1805,8 +1784,17 @@ impl JjBridge {
         })
     }
 
-    fn select_push_remote(&self) -> Result<RemoteNameBuf, AppError> {
-        if let Some(remote) = self
+    fn select_publication_remote(
+        &self,
+        requested: Option<&str>,
+    ) -> Result<RemoteNameBuf, AppError> {
+        let remotes =
+            git::get_all_remote_names(self.repo.store()).map_err(|_| AppError::BackendFailure {
+                operation: "finish",
+            })?;
+        let remote = if let Some(requested) = requested {
+            requested.into()
+        } else if let Some(configured) = self
             .workspace
             .settings()
             .get_string("git.push")
@@ -1815,16 +1803,18 @@ impl JjBridge {
                 operation: "finish",
             })?
         {
-            return Ok(remote.into());
-        }
-        let remotes =
-            git::get_all_remote_names(self.repo.store()).map_err(|_| AppError::BackendFailure {
-                operation: "finish",
-            })?;
-        if let [remote] = remotes.as_slice() {
-            Ok(remote.clone())
+            configured.into()
+        } else if let [remote] = remotes.as_slice() {
+            remote.clone()
         } else {
-            Ok("origin".into())
+            "origin".into()
+        };
+        if remotes.contains(&remote) {
+            Ok(remote)
+        } else {
+            Err(AppError::RemoteNotFound {
+                remote: remote.as_str().to_owned(),
+            })
         }
     }
 
@@ -1860,6 +1850,22 @@ impl JjBridge {
                 change_id: change_id.to_string(),
             })
         }
+    }
+
+    async fn validate_publication(
+        &self,
+        repo: &dyn jj_lib::repo::Repo,
+        bookmark: &RefNameBuf,
+        remote: &RemoteName,
+        target_id: &CommitId,
+    ) -> Result<(), AppError> {
+        let known_heads = repo
+            .view()
+            .remote_bookmarks(remote)
+            .flat_map(|(_, remote_ref)| remote_ref.target.added_ids().cloned())
+            .collect();
+        self.ensure_ready(repo, known_heads, target_id).await?;
+        self.preflight_remote_bookmark(repo, bookmark, remote)
     }
 
     async fn ensure_ready(
@@ -1935,7 +1941,6 @@ impl JjBridge {
         repo: &dyn jj_lib::repo::Repo,
         bookmark: &RefNameBuf,
         remote: &RemoteName,
-        _change_id: &str,
     ) -> Result<(), AppError> {
         let targets = LocalAndRemoteRef {
             local_target: repo.view().get_local_bookmark(bookmark),
@@ -1964,44 +1969,56 @@ impl JjBridge {
         description_action: DescriptionAction,
         local_action: LocalBookmarkAction,
     ) -> Result<FinishData, AppError> {
-        let bookmark_string = bookmark.as_str().to_owned();
-        let remote_string = remote.as_str().to_owned();
         let change_id_string = change_id.to_string();
-        let local_target = self.repo.view().get_local_bookmark(&bookmark).clone();
+        let result = self.publish_bookmark(&bookmark, &remote).await;
+        match result {
+            Ok(remote_action) => Ok(FinishData {
+                change: self.change_by_change_id(&change_id).await?,
+                description_action,
+                publication: FinishPublication::Complete {
+                    bookmark: bookmark.as_str().to_owned(),
+                    remote: remote.as_str().to_owned(),
+                    local_action,
+                    remote_action,
+                },
+            }),
+            Err(failure) => Err(AppError::FinishPartial {
+                change_id: change_id_string,
+                bookmark: bookmark.as_str().to_owned(),
+                remote: remote.as_str().to_owned(),
+                description_action,
+                local_action,
+                remote_state: failure.remote_state,
+                reason: failure.reason,
+            }),
+        }
+    }
+
+    /// Publishes exactly one existing local bookmark and classifies every outcome without
+    /// embedding any command-specific response schema.
+    async fn publish_bookmark(
+        &mut self,
+        bookmark: &RefNameBuf,
+        remote: &RemoteNameBuf,
+    ) -> Result<RemoteBookmarkAction, PublicationFailure> {
+        let local_target = self.repo.view().get_local_bookmark(bookmark).clone();
         let remote_ref = self
             .repo
             .view()
-            .get_remote_bookmark(bookmark.to_remote_symbol(&remote))
+            .get_remote_bookmark(bookmark.to_remote_symbol(remote))
             .clone();
         let update = match classify_ref_push_action(LocalAndRemoteRef {
             local_target: &local_target,
             remote_ref: &remote_ref,
         }) {
-            RefPushAction::AlreadyMatches => {
-                return Ok(FinishData {
-                    change: self.change_by_change_id(&change_id).await?,
-                    description_action,
-                    publication: FinishPublication::Complete {
-                        bookmark: bookmark_string,
-                        remote: remote_string,
-                        local_action,
-                        remote_action: RemoteBookmarkAction::Unchanged,
-                    },
-                });
-            }
+            RefPushAction::AlreadyMatches => return Ok(RemoteBookmarkAction::Unchanged),
             RefPushAction::Update(update) => update,
             RefPushAction::LocalConflicted
             | RefPushAction::RemoteConflicted
             | RefPushAction::RemoteUntracked => {
-                return Err(AppError::FinishPartial {
-                    change_id: change_id_string,
-                    bookmark: bookmark_string,
-                    remote: remote_string,
-                    description_action,
-                    local_action,
-                    remote_state: FinishRemoteState::NotUpdated,
-                    reason: FinishPartialReason::Backend,
-                });
+                return Err(PublicationFailure::not_updated(
+                    PublicationFailureReason::Backend,
+                ));
             }
         };
         let remote_action = if update.before.is_none() {
@@ -2019,27 +2036,11 @@ impl JjBridge {
             .workspace
             .settings()
             .get_bool("git.sign-on-push")
-            .map_err(|_| AppError::FinishPartial {
-                change_id: change_id_string.clone(),
-                bookmark: bookmark_string.clone(),
-                remote: remote_string.clone(),
-                description_action,
-                local_action,
-                remote_state: FinishRemoteState::NotUpdated,
-                reason: FinishPartialReason::Backend,
-            })?;
+            .map_err(|_| PublicationFailure::not_updated(PublicationFailureReason::Backend))?;
         if sign_on_push {
-            self.sign_commits_before_push(&mut tx, &remote, &mut targets)
+            self.sign_commits_before_push(&mut tx, remote, &mut targets)
                 .await
-                .map_err(|_| AppError::FinishPartial {
-                    change_id: change_id_string.clone(),
-                    bookmark: bookmark_string.clone(),
-                    remote: remote_string.clone(),
-                    description_action,
-                    local_action,
-                    remote_state: FinishRemoteState::NotUpdated,
-                    reason: FinishPartialReason::Backend,
-                })?;
+                .map_err(|_| PublicationFailure::not_updated(PublicationFailureReason::Backend))?;
         }
         if let Some(signed_target) = targets
             .bookmarks
@@ -2047,20 +2048,11 @@ impl JjBridge {
             .and_then(|(_, update)| update.after.clone())
         {
             tx.repo_mut()
-                .set_local_bookmark_target(&bookmark, RefTarget::normal(signed_target));
+                .set_local_bookmark_target(bookmark, RefTarget::normal(signed_target));
         }
 
-        let git_settings = GitSettings::from_settings(self.workspace.settings()).map_err(|_| {
-            AppError::FinishPartial {
-                change_id: change_id_string.clone(),
-                bookmark: bookmark_string.clone(),
-                remote: remote_string.clone(),
-                description_action,
-                local_action,
-                remote_state: FinishRemoteState::NotUpdated,
-                reason: FinishPartialReason::Backend,
-            }
-        })?;
+        let git_settings = GitSettings::from_settings(self.workspace.settings())
+            .map_err(|_| PublicationFailure::not_updated(PublicationFailureReason::Backend))?;
         let mut subprocess_options = git_settings.to_subprocess_options();
         subprocess_options
             .environment
@@ -2069,11 +2061,13 @@ impl JjBridge {
         let push_result = git::push_refs(
             tx.repo_mut(),
             subprocess_options,
-            &remote,
+            remote,
             &targets,
             &mut callback,
             &GitPushOptions::default(),
         );
+        let bookmark_string = bookmark.as_str();
+        let remote_string = remote.as_str();
 
         match push_result {
             Ok(stats) if stats.all_ok() => {
@@ -2085,30 +2079,13 @@ impl JjBridge {
                 {
                     let reason = match error {
                         AppError::OperationIncomplete { .. } => {
-                            FinishPartialReason::LocalTrackingUpdate
+                            PublicationFailureReason::LocalTrackingUpdate
                         }
-                        _ => FinishPartialReason::Backend,
+                        _ => PublicationFailureReason::Backend,
                     };
-                    return Err(AppError::FinishPartial {
-                        change_id: change_id_string,
-                        bookmark: bookmark_string,
-                        remote: remote_string,
-                        description_action,
-                        local_action,
-                        remote_state: FinishRemoteState::Updated,
-                        reason,
-                    });
+                    return Err(PublicationFailure::updated(reason));
                 }
-                Ok(FinishData {
-                    change: self.change_by_change_id(&change_id).await?,
-                    description_action,
-                    publication: FinishPublication::Complete {
-                        bookmark: bookmark_string,
-                        remote: remote_string,
-                        local_action,
-                        remote_action,
-                    },
-                })
+                Ok(remote_action)
             }
             Ok(stats) if !stats.pushed.is_empty() => {
                 let operation_description =
@@ -2116,52 +2093,26 @@ impl JjBridge {
                 let _ = self
                     .finish_transaction(tx, "push", operation_description)
                     .await;
-                Err(AppError::FinishPartial {
-                    change_id: change_id_string,
-                    bookmark: bookmark_string,
-                    remote: remote_string,
-                    description_action,
-                    local_action,
-                    remote_state: FinishRemoteState::Updated,
-                    reason: FinishPartialReason::LocalTrackingUpdate,
-                })
+                Err(PublicationFailure::updated(
+                    PublicationFailureReason::LocalTrackingUpdate,
+                ))
             }
             Ok(stats) => {
                 let reason = if !stats.rejected.is_empty() {
-                    FinishPartialReason::LeaseRejected
+                    PublicationFailureReason::LeaseRejected
                 } else if !stats.remote_rejected.is_empty() {
-                    FinishPartialReason::RemoteRejected
+                    PublicationFailureReason::RemoteRejected
                 } else {
-                    FinishPartialReason::Backend
+                    PublicationFailureReason::Backend
                 };
-                Err(AppError::FinishPartial {
-                    change_id: change_id_string,
-                    bookmark: bookmark_string,
-                    remote: remote_string,
-                    description_action,
-                    local_action,
-                    remote_state: FinishRemoteState::NotUpdated,
-                    reason,
-                })
+                Err(PublicationFailure::not_updated(reason))
             }
-            Err(GitPushError::Subprocess(_)) => Err(AppError::FinishPartial {
-                change_id: change_id_string,
-                bookmark: bookmark_string,
-                remote: remote_string,
-                description_action,
-                local_action,
-                remote_state: FinishRemoteState::Unknown,
-                reason: FinishPartialReason::TransportOrAuthentication,
-            }),
-            Err(_) => Err(AppError::FinishPartial {
-                change_id: change_id_string,
-                bookmark: bookmark_string,
-                remote: remote_string,
-                description_action,
-                local_action,
-                remote_state: FinishRemoteState::Unknown,
-                reason: FinishPartialReason::Backend,
-            }),
+            Err(GitPushError::Subprocess(_)) => Err(PublicationFailure::unknown(
+                PublicationFailureReason::TransportOrAuthentication,
+            )),
+            Err(_) => Err(PublicationFailure::unknown(
+                PublicationFailureReason::Backend,
+            )),
         }
     }
 
@@ -2799,6 +2750,34 @@ struct BookmarkContext {
     name: RefNameBuf,
     remote: RemoteNameBuf,
     old_local_target: RefTarget,
+}
+
+struct PublicationFailure {
+    remote_state: PublicationRemoteState,
+    reason: PublicationFailureReason,
+}
+
+impl PublicationFailure {
+    fn not_updated(reason: PublicationFailureReason) -> Self {
+        Self {
+            remote_state: PublicationRemoteState::NotUpdated,
+            reason,
+        }
+    }
+
+    fn updated(reason: PublicationFailureReason) -> Self {
+        Self {
+            remote_state: PublicationRemoteState::Updated,
+            reason,
+        }
+    }
+
+    fn unknown(reason: PublicationFailureReason) -> Self {
+        Self {
+            remote_state: PublicationRemoteState::Unknown,
+            reason,
+        }
+    }
 }
 
 struct SilentGitSubprocessCallback;

@@ -53,13 +53,13 @@ impl RemoteBookmarkRejectReason {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FinishRemoteState {
+pub enum PublicationRemoteState {
     NotUpdated,
     Updated,
     Unknown,
 }
 
-impl FinishRemoteState {
+impl PublicationRemoteState {
     fn as_str(self) -> &'static str {
         match self {
             Self::NotUpdated => "not_updated",
@@ -70,7 +70,7 @@ impl FinishRemoteState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FinishPartialReason {
+pub enum PublicationFailureReason {
     LeaseRejected,
     RemoteRejected,
     TransportOrAuthentication,
@@ -78,7 +78,7 @@ pub enum FinishPartialReason {
     Backend,
 }
 
-impl FinishPartialReason {
+impl PublicationFailureReason {
     fn as_str(self) -> &'static str {
         match self {
             Self::LeaseRejected => "lease_rejected",
@@ -141,8 +141,8 @@ pub enum AppError {
         remote: String,
         description_action: DescriptionAction,
         local_action: LocalBookmarkAction,
-        remote_state: FinishRemoteState,
-        reason: FinishPartialReason,
+        remote_state: PublicationRemoteState,
+        reason: PublicationFailureReason,
     },
     InvalidHunkSelection {
         path: String,
