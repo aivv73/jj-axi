@@ -238,7 +238,7 @@ impl JjBridge {
         if let Some(after) = after {
             names.retain(|name| name.as_str() > after);
         }
-        let mut page_names: Vec<_> = names.into_iter().take(limit + 1).collect();
+        let mut page_names: Vec<_> = names.into_iter().take(limit.saturating_add(1)).collect();
         let truncated = page_names.len() > limit;
         if truncated {
             page_names.pop();
