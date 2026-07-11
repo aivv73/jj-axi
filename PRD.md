@@ -60,7 +60,7 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 | Command | Wraps | Notes |
 |---|---|---|
 | `bookmark list/set/push` | `jj bookmark` + `jj git push` | Bounded multi-remote collaboration view over local tracking state; explicit safe local movement and exact-name publication. Listing never fetches. |
-| `pr status` | GitHub API | Derived field style, e.g. `checks: 3/3 passed`. |
+| `pr status <number> [--repo <[host/]owner/name>]` | GitHub GraphQL API through authenticated `gh` | Explicit PR selection; normalized multi-host repository identity; aggregate check, review, and mergeability state; derived merge readiness and ordered blocking reasons. No prompts or raw GitHub schema output. |
 
 ### Setup
 
