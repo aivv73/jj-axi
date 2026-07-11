@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 
@@ -6,7 +7,8 @@ use serde_json::Value;
 use crate::error::AppError;
 use crate::model::{PrChecks, PrStatusData};
 
-const QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft mergeable reviewDecision headRefName headRefOid baseRefName commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ... on CheckRun{status conclusion} ... on StatusContext{state}} pageInfo{hasNextPage endCursor}}}}}}}}}";
+const QUERY: &str = "query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft mergeable reviewDecision headRefName headRefOid baseRefName commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100,after:$after){nodes{__typename ... on CheckRun{status conclusion} ... on StatusContext{state}} pageInfo{hasNextPage endCursor}}}}}}}}}";
+const MAX_CHECKS: usize = 1_000;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct RepositoryIdentity {
@@ -68,44 +70,10 @@ pub(crate) fn pr_status(
             }
         }
     };
-    let mut command = Command::new("gh");
-    command
-        .args(["api", "graphql", "-f", &format!("query={QUERY}")])
-        .args(["-F", &format!("owner={}", identity.owner)])
-        .args(["-F", &format!("name={}", identity.name)])
-        .args(["-F", &format!("number={number}")])
-        .env("GH_PROMPT_DISABLED", "1");
-    if identity.host != "github.com" {
-        command.args(["--hostname", &identity.host]);
-    }
-    let output = command.output().map_err(|_| AppError::GithubCliNotFound)?;
-    if !output.status.success() {
-        return Err(AppError::GithubApiUnavailable { retryable: true });
-    }
-    let root: Value =
-        serde_json::from_slice(&output.stdout).map_err(|_| AppError::GithubResponseInvalid)?;
-    let pr_value = root
-        .pointer("/data/repository/pullRequest")
-        .ok_or(AppError::GithubResponseInvalid)?;
+    let (pr_value, nodes) = fetch_pr_pages(&identity, number)?;
     let pr = pr_value
         .as_object()
         .ok_or(AppError::GithubResponseInvalid)?;
-    let contexts = pr_value
-        .pointer("/commits/nodes/0/commit/statusCheckRollup/contexts")
-        .and_then(Value::as_object);
-    if contexts
-        .and_then(|value| value.get("pageInfo"))
-        .and_then(|value| value.get("hasNextPage"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Err(AppError::GithubResponseInvalid);
-    }
-    let nodes = contexts
-        .and_then(|value| value.get("nodes"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
     let mut checks = PrChecks {
         total: nodes.len() as u64,
         passed: 0,
@@ -202,6 +170,75 @@ pub(crate) fn pr_status(
         ready_to_merge,
         blocking_reasons,
     })
+}
+
+fn fetch_pr_pages(
+    identity: &RepositoryIdentity,
+    number: u64,
+) -> Result<(Value, Vec<Value>), AppError> {
+    let mut after: Option<String> = None;
+    let mut seen_cursors = HashSet::new();
+    let mut first_pr = None;
+    let mut nodes = Vec::new();
+    loop {
+        let mut command = Command::new("gh");
+        command
+            .args(["api", "graphql", "-f", &format!("query={QUERY}")])
+            .args(["-F", &format!("owner={}", identity.owner)])
+            .args(["-F", &format!("name={}", identity.name)])
+            .args(["-F", &format!("number={number}")])
+            .env("GH_PROMPT_DISABLED", "1");
+        if let Some(cursor) = &after {
+            command.args(["-F", &format!("after={cursor}")]);
+        }
+        if identity.host != "github.com" {
+            command.args(["--hostname", &identity.host]);
+        }
+        let output = command.output().map_err(|_| AppError::GithubCliNotFound)?;
+        if !output.status.success() {
+            return Err(AppError::GithubApiUnavailable { retryable: true });
+        }
+        let root: Value =
+            serde_json::from_slice(&output.stdout).map_err(|_| AppError::GithubResponseInvalid)?;
+        let pr = root
+            .pointer("/data/repository/pullRequest")
+            .cloned()
+            .ok_or(AppError::GithubResponseInvalid)?;
+        if first_pr.is_none() {
+            first_pr = Some(pr.clone());
+        }
+        let contexts = pr
+            .pointer("/commits/nodes/0/commit/statusCheckRollup/contexts")
+            .and_then(Value::as_object);
+        if let Some(page_nodes) = contexts
+            .and_then(|value| value.get("nodes"))
+            .and_then(Value::as_array)
+        {
+            nodes.extend(page_nodes.iter().cloned());
+        }
+        if nodes.len() > MAX_CHECKS {
+            return Err(AppError::GithubResponseTooLarge);
+        }
+        let page_info = contexts.and_then(|value| value.get("pageInfo"));
+        let has_next = page_info
+            .and_then(|value| value.get("hasNextPage"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !has_next {
+            break;
+        }
+        let cursor = page_info
+            .and_then(|value| value.get("endCursor"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or(AppError::GithubResponseInvalid)?
+            .to_owned();
+        if !seen_cursors.insert(cursor.clone()) {
+            return Err(AppError::GithubResponseInvalid);
+        }
+        after = Some(cursor);
+    }
+    Ok((first_pr.ok_or(AppError::GithubResponseInvalid)?, nodes))
 }
 
 fn identity_from_remote(url: &str) -> Option<RepositoryIdentity> {

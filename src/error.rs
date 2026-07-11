@@ -196,6 +196,7 @@ pub enum AppError {
         retryable: bool,
     },
     GithubResponseInvalid,
+    GithubResponseTooLarge,
     Internal,
 }
 
@@ -421,6 +422,10 @@ impl AppError {
             ]),
             Self::GithubResponseInvalid => ToonValue::Object(vec![
                 ("code", string("github_response_invalid")),
+                ("retryable", ToonValue::Bool(false)),
+            ]),
+            Self::GithubResponseTooLarge => ToonValue::Object(vec![
+                ("code", string("github_response_too_large")),
                 ("retryable", ToonValue::Bool(false)),
             ]),
             Self::Internal => ToonValue::Object(vec![("code", string("internal"))]),
