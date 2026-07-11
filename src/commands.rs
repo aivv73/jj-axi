@@ -29,6 +29,29 @@ pub(crate) async fn run(parsed: ParsedCli, cwd: &Path) -> ExitCode {
 }
 
 async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError> {
+    if let CommandInput::Operations { limit } = command {
+        return Ok(Response {
+            kind: ResponseKind::Operations,
+            data: ResponseData::Operations(JjBridge::operations(cwd, limit).await?),
+        });
+    }
+    let undo_source_ids = if matches!(&command, CommandInput::Undo { .. }) {
+        let operation_data = JjBridge::operations(cwd, usize::MAX).await?;
+        let mut operation_ids: Vec<_> = operation_data
+            .operations
+            .into_iter()
+            .filter(|operation| operation.current)
+            .map(|operation| operation.operation_id)
+            .collect();
+        operation_ids.sort();
+        if matches!(&command, CommandInput::Undo { to: None }) && operation_ids.len() > 1 {
+            return Err(AppError::OperationHistoryDiverged { operation_ids });
+        }
+        Some(operation_ids)
+    } else {
+        None
+    };
+
     let mut bridge = JjBridge::open(cwd).await?;
     match command {
         CommandInput::New { message } => Ok(Response {
@@ -95,6 +118,17 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
             kind: ResponseKind::Reorder,
             data: ResponseData::Reorder(bridge.reorder(&sequence).await?),
         }),
+        CommandInput::Undo { to } => Ok(Response {
+            kind: ResponseKind::Undo,
+            data: ResponseData::Undo(
+                bridge
+                    .undo(to.as_deref(), undo_source_ids.unwrap_or_default())
+                    .await?,
+            ),
+        }),
+        CommandInput::Operations { .. } => {
+            unreachable!("handled before repository synchronization")
+        }
     }
 }
 

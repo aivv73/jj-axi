@@ -44,7 +44,8 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 | `reorder --sequence "<id1>,<id2>,..."` | `jj rebase` chain | Declarative target order instead of manual rebase steps. |
 | `squash <change> [--into <change>]` | `jj squash` | |
 | `abandon <change>` | `jj abandon` | Idempotent: already-abandoned = no-op, exit 0. |
-| `undo [--to <op-id>]` | `jj op log` + `jj op restore` | Minimal schema over the raw oplog, which is too verbose for agent consumption as-is. |
+| `operations [--limit]` | `jj op log` | Observationally read-only, bounded reverse-topological operation list with parent IDs, classification, and undo eligibility. Does not snapshot the working copy or reconcile divergent heads. |
+| `undo [--to <op-id>]` | `jj op log` + `jj op restore` | Bare undo reverses the latest user-visible repository mutation while preserving newer synchronized working-copy content; explicit restore selects an exact reachable operation. Strictly local, repeated undo walks backward, divergent history requires an explicit target, and foundation operations cannot be removed. See ADR 0002. |
 
 ### Repository health
 
@@ -104,7 +105,7 @@ No code dependency on any non-compete-licensed project.
 1. **M1 — Read-only interface.** `inspect`, `log`, `show`, `diff`. Establishes TOON output, schema conventions, truncation contract.
 2. **M2 — Mutations.** `new`, `describe`, `checkpoint`, `finish`. Establishes idempotency and structured-error conventions.
 3. **M3 — History editing.** `split`, `move`, `absorb`, `reorder`. Blocked on open question #1 (ADR required first). This is the milestone that actually targets the vcbench gap.
-4. **M4 — Integrations.** `setup hooks`, `setup skill`, `bookmark`, `pr status`, `undo`.
+4. **M4 — Integrations.** Independent vertical slices: `operations`/`undo`, `bookmark`, `pr status`, `setup skill`, then `setup hooks`.
 5. **M5 — Benchmark.** Run vcbench-style evaluation against raw jj; publish results; submit to AXI catalog if numbers hold up.
 
 `validate`/`repair` are explicitly deferred pending open question #3 and are not part of any milestone above.

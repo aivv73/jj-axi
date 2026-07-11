@@ -58,6 +58,12 @@ pub enum CommandInput {
     Reorder {
         sequence: Vec<String>,
     },
+    Operations {
+        limit: usize,
+    },
+    Undo {
+        to: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -154,6 +160,14 @@ enum Command {
         #[arg(long)]
         sequence: String,
     },
+    Operations {
+        #[arg(long, default_value_t = 20, value_parser = parse_limit)]
+        limit: usize,
+    },
+    Undo {
+        #[arg(long)]
+        to: Option<String>,
+    },
 }
 
 pub fn parse<I, T>(args: I) -> ParsedCli
@@ -223,6 +237,8 @@ where
                     };
                 }
             },
+            Command::Operations { limit } => CommandInput::Operations { limit },
+            Command::Undo { to } => CommandInput::Undo { to },
         }),
         Err(error) if error.kind() == ErrorKind::DisplayHelp => ParsedCli::Help(error),
         Err(_) => ParsedCli::InvalidArgument {

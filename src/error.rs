@@ -155,6 +155,27 @@ pub enum AppError {
         reason: String,
         change_ids: Vec<String>,
     },
+    OperationHistoryDiverged {
+        operation_ids: Vec<String>,
+    },
+    InvalidOperationId {
+        operation_id: String,
+    },
+    OperationNotFound {
+        operation_id: String,
+    },
+    OperationAmbiguous {
+        operation_id: String,
+        candidates: Vec<String>,
+    },
+    OperationNotAncestor {
+        operation_id: String,
+    },
+    NothingToUndo,
+    OperationTargetUnsafe {
+        operation_id: String,
+        reason: &'static str,
+    },
     Internal,
 }
 
@@ -298,6 +319,45 @@ impl AppError {
                             .collect(),
                     ),
                 ),
+            ]),
+            Self::OperationHistoryDiverged { operation_ids } => ToonValue::Object(vec![
+                ("code", string("operation_history_diverged")),
+                (
+                    "operation_ids",
+                    ToonValue::Array(operation_ids.iter().map(|id| string(id)).collect()),
+                ),
+            ]),
+            Self::InvalidOperationId { operation_id } => ToonValue::Object(vec![
+                ("code", string("invalid_operation_id")),
+                ("operation_id", string(operation_id)),
+            ]),
+            Self::OperationNotFound { operation_id } => ToonValue::Object(vec![
+                ("code", string("operation_not_found")),
+                ("operation_id", string(operation_id)),
+            ]),
+            Self::OperationAmbiguous {
+                operation_id,
+                candidates,
+            } => ToonValue::Object(vec![
+                ("code", string("operation_ambiguous")),
+                ("operation_id", string(operation_id)),
+                (
+                    "candidates",
+                    ToonValue::Array(candidates.iter().map(|id| string(id)).collect()),
+                ),
+            ]),
+            Self::OperationNotAncestor { operation_id } => ToonValue::Object(vec![
+                ("code", string("operation_not_ancestor")),
+                ("operation_id", string(operation_id)),
+            ]),
+            Self::NothingToUndo => ToonValue::Object(vec![("code", string("nothing_to_undo"))]),
+            Self::OperationTargetUnsafe {
+                operation_id,
+                reason,
+            } => ToonValue::Object(vec![
+                ("code", string("operation_target_unsafe")),
+                ("operation_id", string(operation_id)),
+                ("reason", string(reason)),
             ]),
             Self::Internal => ToonValue::Object(vec![("code", string("internal"))]),
         }

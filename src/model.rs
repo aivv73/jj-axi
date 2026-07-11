@@ -584,6 +584,142 @@ impl Response {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperationKind {
+    Mutation,
+    Synchronization,
+    Undo,
+    Foundation,
+    Unknown,
+}
+
+impl OperationKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Mutation => "mutation",
+            Self::Synchronization => "synchronization",
+            Self::Undo => "undo",
+            Self::Foundation => "foundation",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationEntry {
+    pub operation_id: String,
+    pub parent_operation_ids: Vec<String>,
+    pub description: String,
+    pub kind: OperationKind,
+    pub undo_candidate: bool,
+    pub current: bool,
+}
+
+impl OperationEntry {
+    pub fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("operation_id", string(&self.operation_id)),
+            (
+                "parent_operation_ids",
+                string_array(&self.parent_operation_ids),
+            ),
+            ("description", string(&self.description)),
+            ("kind", string(self.kind.as_str())),
+            ("undo_candidate", ToonValue::Bool(self.undo_candidate)),
+            ("current", ToonValue::Bool(self.current)),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationsData {
+    pub operations: Vec<OperationEntry>,
+}
+
+impl OperationsData {
+    pub fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![(
+            "operations",
+            ToonValue::Array(
+                self.operations
+                    .iter()
+                    .map(OperationEntry::to_toon_value)
+                    .collect(),
+            ),
+        )])
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UndoAction {
+    Restored,
+    Unchanged,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UndoSelection {
+    LatestMutation,
+    Explicit,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UndoTarget {
+    pub operation_id: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UndoData {
+    pub action: UndoAction,
+    pub selection: UndoSelection,
+    pub source_operation_ids: Vec<String>,
+    pub target_operation: UndoTarget,
+    pub result_operation_id: String,
+    pub undone_count: u64,
+    pub external_effects: Vec<String>,
+}
+
+impl UndoData {
+    pub fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            (
+                "action",
+                string(match self.action {
+                    UndoAction::Restored => "restored",
+                    UndoAction::Unchanged => "unchanged",
+                }),
+            ),
+            (
+                "selection",
+                string(match self.selection {
+                    UndoSelection::LatestMutation => "latest_mutation",
+                    UndoSelection::Explicit => "explicit",
+                }),
+            ),
+            (
+                "source_operation_ids",
+                string_array(&self.source_operation_ids),
+            ),
+            (
+                "target_operation",
+                ToonValue::Object(vec![
+                    ("operation_id", string(&self.target_operation.operation_id)),
+                    ("description", string(&self.target_operation.description)),
+                ]),
+            ),
+            ("result_operation_id", string(&self.result_operation_id)),
+            ("undone_count", ToonValue::UInt(self.undone_count)),
+            (
+                "external_effects",
+                ToonValue::Object(vec![
+                    ("reverted", ToonValue::Bool(false)),
+                    ("kinds", string_array(&self.external_effects)),
+                ]),
+            ),
+        ])
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResponseKind {
     New,
@@ -598,6 +734,8 @@ pub enum ResponseKind {
     Move,
     Absorb,
     Reorder,
+    Operations,
+    Undo,
 }
 
 impl ResponseKind {
@@ -615,6 +753,8 @@ impl ResponseKind {
             Self::Move => "move",
             Self::Absorb => "absorb",
             Self::Reorder => "reorder",
+            Self::Operations => "operations",
+            Self::Undo => "undo",
         })
     }
 }
@@ -633,6 +773,8 @@ pub enum ResponseData {
     Move(MoveData),
     Absorb(AbsorbData),
     Reorder(ReorderData),
+    Operations(OperationsData),
+    Undo(UndoData),
 }
 
 impl ResponseData {
@@ -650,6 +792,8 @@ impl ResponseData {
             Self::Move(data) => data.to_toon_value(),
             Self::Absorb(data) => data.to_toon_value(),
             Self::Reorder(data) => data.to_toon_value(),
+            Self::Operations(data) => data.to_toon_value(),
+            Self::Undo(data) => data.to_toon_value(),
         }
     }
 }

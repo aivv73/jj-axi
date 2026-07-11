@@ -32,8 +32,9 @@ use jj_lib::matchers::EverythingMatcher;
 use jj_lib::merge::{Diff as JjDiff, Merge};
 use jj_lib::merged_tree::{MergedTree, TreeDiffEntry};
 use jj_lib::merged_tree_builder::MergedTreeBuilder;
-use jj_lib::object_id::ObjectId;
+use jj_lib::object_id::{HexPrefix, ObjectId, PrefixResolution};
 use jj_lib::op_store::RefTarget;
+use jj_lib::op_walk;
 use jj_lib::ref_name::{RefNameBuf, RemoteName, RemoteNameBuf};
 use jj_lib::refs::{LocalAndRemoteRef, RefPushAction, classify_ref_push_action};
 use jj_lib::repo::{Repo as _, StoreFactories};
@@ -64,11 +65,48 @@ use crate::model::{
     AbsorbData, AbsorbMove, AbsorbSourceAction, Change, CheckpointData, CurrentChange,
     DescribeData, DescriptionAction, DiffData, DiffStat, DiffTarget, FinishData, FinishPublication,
     HistoryChange, HunkRef, InspectData, LocalBookmarkAction, LogData, LogEntry, MoveData, NewData,
-    Patch, RemoteBookmarkAction, ReorderData, ShowData, SkippedPath, SplitData, Status, Truncation,
-    UnmovedHunk,
+    OperationEntry, OperationKind, OperationsData, Patch, RemoteBookmarkAction, ReorderData,
+    ShowData, SkippedPath, SplitData, Status, Truncation, UndoAction, UndoData, UndoSelection,
+    UndoTarget, UnmovedHunk,
 };
 
 const DEFAULT_PATCH_LIMIT_BYTES: u64 = 16 * 1024;
+const AXI_UNDO_PREFIX: &str = "jj-axi undo: restore to operation ";
+
+fn is_push_operation(operation: &jj_lib::operation::Operation) -> bool {
+    operation.metadata().description.starts_with("push ")
+        || operation
+            .metadata()
+            .attributes
+            .get("args")
+            .is_some_and(|args| args.contains(" push"))
+}
+
+fn classify_operation(operation: &jj_lib::operation::Operation) -> OperationKind {
+    let metadata = operation.metadata();
+    if metadata.is_snapshot {
+        OperationKind::Synchronization
+    } else if metadata.description.starts_with(AXI_UNDO_PREFIX)
+        || metadata
+            .description
+            .starts_with("undo: restore to operation ")
+    {
+        OperationKind::Undo
+    } else if operation.parent_ids().is_empty()
+        || (metadata.description.starts_with("add workspace '")
+            && operation.parent_ids().len() == 1)
+    {
+        OperationKind::Foundation
+    } else if metadata
+        .attributes
+        .get("args")
+        .is_some_and(|args| args.starts_with("jj-axi "))
+    {
+        OperationKind::Mutation
+    } else {
+        OperationKind::Unknown
+    }
+}
 
 /// The sole boundary between jj's version-pinned APIs and jj-axi DTOs.
 ///
@@ -83,6 +121,76 @@ pub(crate) struct JjBridge {
 }
 
 impl JjBridge {
+    /// Reads the operation DAG without snapshotting the working copy or reconciling heads.
+    pub(crate) async fn operations(cwd: &Path, limit: usize) -> Result<OperationsData, AppError> {
+        let cwd = std::fs::canonicalize(cwd).map_err(|_| AppError::RepositoryUnavailable {
+            operation: "resolve_working_directory",
+        })?;
+        let workspace_root =
+            find_workspace_root(&cwd).ok_or_else(|| AppError::RepositoryNotFound {
+                path: cwd.display().to_string(),
+            })?;
+        let loader_factory = DefaultWorkspaceLoaderFactory;
+        let loader = loader_factory.create(&workspace_root).map_err(|_| {
+            AppError::RepositoryUnavailable {
+                operation: "discover_workspace",
+            }
+        })?;
+        let settings = load_settings(loader.as_ref())?;
+        let workspace = loader
+            .load(
+                &settings,
+                &StoreFactories::default(),
+                &default_working_copy_factories(),
+            )
+            .map_err(|_| AppError::RepositoryUnavailable {
+                operation: "load_workspace",
+            })?;
+        let repo_loader = workspace.repo_loader();
+        let head_ids = repo_loader
+            .op_heads_store()
+            .get_op_heads()
+            .await
+            .map_err(|_| AppError::BackendFailure {
+                operation: "read_operation_heads",
+            })?;
+        let head_set: HashSet<_> = head_ids.iter().cloned().collect();
+        let mut heads = Vec::with_capacity(head_ids.len());
+        for id in &head_ids {
+            heads.push(repo_loader.load_operation(id).await.map_err(|_| {
+                AppError::BackendFailure {
+                    operation: "read_operations",
+                }
+            })?);
+        }
+        let operations = op_walk::walk_ancestors(&heads)
+            .take(limit)
+            .map(|result| {
+                let operation = result.map_err(|_| AppError::BackendFailure {
+                    operation: "read_operations",
+                })?;
+                let kind = classify_operation(&operation);
+                Ok(OperationEntry {
+                    operation_id: operation.id().hex(),
+                    parent_operation_ids: operation
+                        .parent_ids()
+                        .iter()
+                        .map(ObjectId::hex)
+                        .collect(),
+                    description: operation.metadata().description.clone(),
+                    kind,
+                    undo_candidate: matches!(
+                        kind,
+                        OperationKind::Mutation | OperationKind::Unknown
+                    ),
+                    current: head_set.contains(operation.id()),
+                })
+            })
+            .try_collect()
+            .await?;
+        Ok(OperationsData { operations })
+    }
+
     pub(crate) async fn open(cwd: &Path) -> Result<Self, AppError> {
         let cwd = std::fs::canonicalize(cwd).map_err(|_| AppError::RepositoryUnavailable {
             operation: "resolve_working_directory",
@@ -120,6 +228,208 @@ impl JjBridge {
             cwd,
             workspace,
             repo,
+        })
+    }
+
+    pub(crate) async fn undo(
+        &mut self,
+        to: Option<&str>,
+        mut source_ids: Vec<String>,
+    ) -> Result<UndoData, AppError> {
+        let source = self.repo.operation().clone();
+        if source_ids.is_empty() {
+            source_ids.push(source.id().hex());
+        }
+        let walk_head = if to.is_none() {
+            if let Some(hex) = source.metadata().description.strip_prefix(AXI_UNDO_PREFIX) {
+                let id = jj_lib::op_store::OperationId::try_from_hex(hex).ok_or(
+                    AppError::BackendFailure {
+                        operation: "read_undo_marker",
+                    },
+                )?;
+                self.repo.loader().load_operation(&id).await.map_err(|_| {
+                    AppError::BackendFailure {
+                        operation: "read_undo_marker",
+                    }
+                })?
+            } else {
+                source.clone()
+            }
+        } else {
+            source.clone()
+        };
+        let operations: Vec<_> = op_walk::walk_ancestors(std::slice::from_ref(&walk_head))
+            .try_collect()
+            .await
+            .map_err(|_| AppError::BackendFailure {
+                operation: "read_operations",
+            })?;
+
+        let (target, selection, undone_count) = if let Some(prefix) = to {
+            if prefix.is_empty() || !prefix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(AppError::InvalidOperationId {
+                    operation_id: prefix.to_owned(),
+                });
+            }
+            let hex_prefix =
+                HexPrefix::try_from_hex(prefix).ok_or_else(|| AppError::InvalidOperationId {
+                    operation_id: prefix.to_owned(),
+                })?;
+            let target_id = match self
+                .repo
+                .op_store()
+                .resolve_operation_id_prefix(&hex_prefix)
+                .await
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "resolve_operation",
+                })? {
+                PrefixResolution::NoMatch => {
+                    return Err(AppError::OperationNotFound {
+                        operation_id: prefix.to_owned(),
+                    });
+                }
+                PrefixResolution::AmbiguousMatch => {
+                    let mut candidates: Vec<_> = operations
+                        .iter()
+                        .filter(|operation| operation.id().hex().starts_with(prefix))
+                        .map(|operation| operation.id().hex())
+                        .collect();
+                    candidates.sort();
+                    candidates.truncate(3);
+                    return Err(AppError::OperationAmbiguous {
+                        operation_id: prefix.to_owned(),
+                        candidates,
+                    });
+                }
+                PrefixResolution::SingleMatch(id) => id,
+            };
+            let target = operations
+                .iter()
+                .find(|operation| operation.id() == &target_id)
+                .cloned()
+                .ok_or_else(|| AppError::OperationNotAncestor {
+                    operation_id: target_id.hex(),
+                })?;
+            let target_view = target.view().await.map_err(|_| AppError::BackendFailure {
+                operation: "read_operations",
+            })?;
+            if target_view
+                .store_view()
+                .wc_commit_ids
+                .get(self.workspace.workspace_name())
+                .is_none()
+            {
+                return Err(AppError::OperationTargetUnsafe {
+                    operation_id: target.id().hex(),
+                    reason: "active_workspace_missing",
+                });
+            }
+            let count = operations
+                .iter()
+                .take_while(|operation| operation.id() != target.id())
+                .filter(|operation| {
+                    matches!(
+                        classify_operation(operation),
+                        OperationKind::Mutation | OperationKind::Unknown
+                    )
+                })
+                .count() as u64;
+            (target, UndoSelection::Explicit, count)
+        } else {
+            let mutation = operations
+                .iter()
+                .find(|operation| {
+                    matches!(
+                        classify_operation(operation),
+                        OperationKind::Mutation | OperationKind::Unknown
+                    )
+                })
+                .ok_or(AppError::NothingToUndo)?;
+            let parent_id = mutation
+                .parent_ids()
+                .first()
+                .ok_or(AppError::BackendFailure {
+                    operation: "undo_root",
+                })?;
+            let target = self
+                .repo
+                .loader()
+                .load_operation(parent_id)
+                .await
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "read_operations",
+                })?;
+            (target, UndoSelection::LatestMutation, 1)
+        };
+
+        if target.id() == source.id() {
+            return Ok(UndoData {
+                action: UndoAction::Unchanged,
+                selection,
+                source_operation_ids: source_ids,
+                target_operation: UndoTarget {
+                    operation_id: target.id().hex(),
+                    description: target.metadata().description.clone(),
+                },
+                result_operation_id: source.id().hex(),
+                undone_count: 0,
+                external_effects: vec![],
+            });
+        }
+
+        let target_view = target
+            .view()
+            .await
+            .map_err(|_| AppError::BackendFailure { operation: "undo" })?;
+        let restored_view = target_view.store_view().clone();
+        let current_wc = if selection == UndoSelection::LatestMutation {
+            Some(self.current_commit().await?)
+        } else {
+            None
+        };
+        let target_wc_id = restored_view
+            .wc_commit_ids
+            .get(self.workspace.workspace_name())
+            .cloned();
+        let mut tx = self.start_transaction("undo");
+        tx.repo_mut().set_view(restored_view);
+        if let (Some(current_wc), Some(target_wc_id)) = (current_wc, target_wc_id) {
+            let target_wc = tx
+                .repo()
+                .store()
+                .get_commit_async(&target_wc_id)
+                .await
+                .map_err(|_| AppError::BackendFailure { operation: "undo" })?;
+            let mut builder = tx.repo_mut().rewrite_commit(&target_wc).detach();
+            builder.set_tree(current_wc.tree());
+            builder
+                .write(tx.repo_mut())
+                .await
+                .map_err(|_| AppError::BackendFailure { operation: "undo" })?;
+        }
+        let description = format!("{AXI_UNDO_PREFIX}{}", target.id().hex());
+        self.finish_transaction(tx, "undo", description).await?;
+        let result_id = self.repo.operation().id().hex();
+        let external_effects = if operations
+            .iter()
+            .take_while(|operation| operation.id() != target.id())
+            .any(is_push_operation)
+        {
+            vec!["git_push".to_owned()]
+        } else {
+            vec![]
+        };
+        Ok(UndoData {
+            action: UndoAction::Restored,
+            selection,
+            source_operation_ids: source_ids,
+            target_operation: UndoTarget {
+                operation_id: target.id().hex(),
+                description: target.metadata().description.clone(),
+            },
+            result_operation_id: result_id,
+            undone_count,
+            external_effects,
         })
     }
 
