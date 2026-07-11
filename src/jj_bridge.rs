@@ -63,12 +63,12 @@ use crate::error::{
 };
 use crate::model::{
     AbsorbData, AbsorbMove, AbsorbSourceAction, BookmarkComparisonStatus, BookmarkEntry,
-    BookmarkListData, BookmarkRemoteState, BookmarkSetData, BookmarkTargetState, Change,
-    CheckpointData, CurrentChange, DescribeData, DescriptionAction, DiffData, DiffStat, DiffTarget,
-    FinishData, FinishPublication, HistoryChange, HunkRef, InspectData, LocalBookmarkAction,
-    LogData, LogEntry, MoveData, NewData, OperationEntry, OperationKind, OperationsData, Patch,
-    RemoteBookmarkAction, ReorderData, ShowData, SkippedPath, SplitData, Status, Truncation,
-    UndoAction, UndoData, UndoSelection, UndoTarget, UnmovedHunk,
+    BookmarkListData, BookmarkPushData, BookmarkRemoteState, BookmarkSetData, BookmarkTargetState,
+    Change, CheckpointData, CurrentChange, DescribeData, DescriptionAction, DiffData, DiffStat,
+    DiffTarget, FinishData, FinishPublication, HistoryChange, HunkRef, InspectData,
+    LocalBookmarkAction, LogData, LogEntry, MoveData, NewData, OperationEntry, OperationKind,
+    OperationsData, Patch, RemoteBookmarkAction, ReorderData, ShowData, SkippedPath, SplitData,
+    Status, Truncation, UndoAction, UndoData, UndoSelection, UndoTarget, UnmovedHunk,
 };
 
 const DEFAULT_PATCH_LIMIT_BYTES: u64 = 16 * 1024;
@@ -772,6 +772,66 @@ impl JjBridge {
         Ok(CheckpointData {
             checkpoint,
             current_change: change_from_commit(&current),
+        })
+    }
+
+    pub(crate) async fn push_bookmark(
+        &mut self,
+        bookmark: &str,
+        requested_remote: Option<&str>,
+    ) -> Result<BookmarkPushData, AppError> {
+        let name = parse_bookmark_name(bookmark).map_err(|_| AppError::InvalidArgument {
+            argument: "bookmark",
+            constraint: "valid_bookmark_name",
+        })?;
+        let remote = self.select_publication_remote(requested_remote)?;
+        let target_id = self
+            .repo
+            .view()
+            .get_local_bookmark(&name)
+            .as_normal()
+            .cloned()
+            .ok_or_else(|| {
+                if self.repo.view().get_local_bookmark(&name).is_absent() {
+                    AppError::BookmarkNotFound {
+                        bookmark: name.as_str().to_owned(),
+                    }
+                } else {
+                    AppError::RemoteBookmarkRejected {
+                        bookmark: name.as_str().to_owned(),
+                        remote: remote.as_str().to_owned(),
+                        reason: RemoteBookmarkRejectReason::LocalConflicted,
+                    }
+                }
+            })?;
+        let target = self.commit_by_id(&target_id).await?;
+        self.validate_publication(self.repo.as_ref(), &name, &remote, &target_id)
+            .await?;
+        let action = self
+            .publish_bookmark(&name, &remote)
+            .await
+            .map_err(|failure| AppError::BookmarkPushPartial {
+                bookmark: name.as_str().to_owned(),
+                target_change_id: target.change_id().to_string(),
+                target_commit_id: target.id().hex(),
+                remote: remote.as_str().to_owned(),
+                remote_state: failure.remote_state,
+                reason: failure.reason,
+            })?;
+        let final_target_id = self
+            .repo
+            .view()
+            .get_local_bookmark(&name)
+            .as_normal()
+            .cloned()
+            .ok_or(AppError::Internal)?;
+        let final_target = self.commit_by_id(&final_target_id).await?;
+        Ok(BookmarkPushData {
+            name: name.as_str().to_owned(),
+            target_change_id: final_target.change_id().to_string(),
+            target_commit_id: final_target.id().hex(),
+            remote: remote.as_str().to_owned(),
+            action,
         })
     }
 

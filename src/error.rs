@@ -124,6 +124,9 @@ pub enum AppError {
         bookmark: String,
         change_id: String,
     },
+    BookmarkNotFound {
+        bookmark: String,
+    },
     RemoteNotFound {
         remote: String,
     },
@@ -141,6 +144,14 @@ pub enum AppError {
         remote: String,
         description_action: DescriptionAction,
         local_action: LocalBookmarkAction,
+        remote_state: PublicationRemoteState,
+        reason: PublicationFailureReason,
+    },
+    BookmarkPushPartial {
+        bookmark: String,
+        target_change_id: String,
+        target_commit_id: String,
+        remote: String,
         remote_state: PublicationRemoteState,
         reason: PublicationFailureReason,
     },
@@ -249,6 +260,10 @@ impl AppError {
                 ("change_id", string(change_id)),
                 ("reason", string("backwards_or_sideways")),
             ]),
+            Self::BookmarkNotFound { bookmark } => ToonValue::Object(vec![
+                ("code", string("bookmark_not_found")),
+                ("bookmark", string(bookmark)),
+            ]),
             Self::RemoteNotFound { remote } => ToonValue::Object(vec![
                 ("code", string("remote_not_found")),
                 ("remote", string(remote)),
@@ -284,6 +299,22 @@ impl AppError {
                 ("remote", string(remote)),
                 ("description_action", string(description_action.as_str())),
                 ("local_action", string(local_action.as_str())),
+                ("remote_state", string(remote_state.as_str())),
+                ("reason", string(reason.as_str())),
+            ]),
+            Self::BookmarkPushPartial {
+                bookmark,
+                target_change_id,
+                target_commit_id,
+                remote,
+                remote_state,
+                reason,
+            } => ToonValue::Object(vec![
+                ("code", string("bookmark_push_partial")),
+                ("bookmark", string(bookmark)),
+                ("target_change_id", string(target_change_id)),
+                ("target_commit_id", string(target_commit_id)),
+                ("remote", string(remote)),
                 ("remote_state", string(remote_state.as_str())),
                 ("reason", string(reason.as_str())),
             ]),

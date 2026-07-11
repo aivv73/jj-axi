@@ -136,6 +136,10 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
                 bridge.set_bookmark(&name, &target, allow_backwards).await?,
             ),
         }),
+        CommandInput::BookmarkPush { name, remote } => Ok(Response {
+            kind: ResponseKind::BookmarkPush,
+            data: ResponseData::BookmarkPush(bridge.push_bookmark(&name, remote.as_deref()).await?),
+        }),
         CommandInput::Undo { to } => Ok(Response {
             kind: ResponseKind::Undo,
             data: ResponseData::Undo(

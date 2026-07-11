@@ -247,6 +247,64 @@ fn bookmark_set_is_safe_idempotent_and_supports_explicit_backward_moves() {
 }
 
 #[test]
+fn bookmark_push_publishes_exact_name_and_is_idempotent() {
+    let repo = repository();
+    let remote = add_bare_origin(repo.path());
+    assert!(
+        run_jj(repo.path(), &["describe", "-m", "ready"])
+            .status
+            .success()
+    );
+    successful_output(repo.path(), &["bookmark", "set", "feature", "--to", "@"]);
+
+    let first = successful_output(
+        repo.path(),
+        &["bookmark", "push", "feature", "--remote", "origin"],
+    );
+    assert!(first.contains("kind: bookmark_push"));
+    assert!(first.contains("name: feature"));
+    assert!(first.contains("remote: origin"));
+    assert!(first.contains("action: created"));
+    assert!(first.contains("target_change_id:"));
+    assert!(first.contains("target_commit_id:"));
+    assert!(
+        Command::new("git")
+            .args(["show-ref", "--verify", "--quiet", "refs/heads/feature"])
+            .current_dir(remote.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let second = successful_output(repo.path(), &["bookmark", "push", "feature"]);
+    assert!(second.contains("action: unchanged"));
+}
+
+#[test]
+fn bookmark_push_reuses_readiness_and_has_command_specific_partial_errors() {
+    let repo = repository();
+    let remote = add_bare_origin(repo.path());
+    successful_output(repo.path(), &["bookmark", "set", "feature", "--to", "@"]);
+    common::assert_error(
+        common::run_axi(repo.path(), &["bookmark", "push", "feature"]),
+        "change_not_ready",
+    );
+
+    assert!(
+        run_jj(repo.path(), &["describe", "-m", "ready"])
+            .status
+            .success()
+    );
+    remote.close().unwrap();
+    let partial = common::assert_error(
+        common::run_axi(repo.path(), &["bookmark", "push", "feature"]),
+        "bookmark_push_partial",
+    );
+    assert!(partial.contains("remote_state: unknown"));
+    assert!(partial.contains("reason: transport_or_authentication"));
+}
+
+#[test]
 fn explicit_current_operation_is_idempotent() {
     let repo = repository();
     let output = successful_output(repo.path(), &["operations", "--limit", "1"]);

@@ -862,6 +862,27 @@ impl BookmarkSetData {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BookmarkPushData {
+    pub name: String,
+    pub target_change_id: String,
+    pub target_commit_id: String,
+    pub remote: String,
+    pub action: RemoteBookmarkAction,
+}
+
+impl BookmarkPushData {
+    pub fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("name", string(&self.name)),
+            ("target_change_id", string(&self.target_change_id)),
+            ("target_commit_id", string(&self.target_commit_id)),
+            ("remote", string(&self.remote)),
+            ("action", self.action.to_toon_value()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResponseKind {
     New,
     Describe,
@@ -879,6 +900,7 @@ pub enum ResponseKind {
     Undo,
     BookmarkList,
     BookmarkSet,
+    BookmarkPush,
 }
 
 impl ResponseKind {
@@ -900,6 +922,7 @@ impl ResponseKind {
             Self::Undo => "undo",
             Self::BookmarkList => "bookmark_list",
             Self::BookmarkSet => "bookmark_set",
+            Self::BookmarkPush => "bookmark_push",
         })
     }
 }
@@ -922,6 +945,7 @@ pub enum ResponseData {
     Undo(UndoData),
     BookmarkList(BookmarkListData),
     BookmarkSet(BookmarkSetData),
+    BookmarkPush(BookmarkPushData),
 }
 
 impl ResponseData {
@@ -943,6 +967,7 @@ impl ResponseData {
             Self::Undo(data) => data.to_toon_value(),
             Self::BookmarkList(data) => data.to_toon_value(),
             Self::BookmarkSet(data) => data.to_toon_value(),
+            Self::BookmarkPush(data) => data.to_toon_value(),
         }
     }
 }
