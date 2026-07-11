@@ -196,10 +196,30 @@ fn fetch_pr_pages(
         }
         let output = command.output().map_err(|_| AppError::GithubCliNotFound)?;
         if !output.status.success() {
-            return Err(AppError::GithubApiUnavailable { retryable: true });
+            return Err(classify_gh_failure(&output.stderr));
         }
         let root: Value =
             serde_json::from_slice(&output.stdout).map_err(|_| AppError::GithubResponseInvalid)?;
+        if let Some(errors) = root.get("errors").and_then(Value::as_array) {
+            let message = errors
+                .iter()
+                .filter_map(|error| error.get("message").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_lowercase();
+            if message.contains("rate limit") {
+                return Err(AppError::GithubRateLimited);
+            }
+            if message.contains("repository")
+                && (message.contains("resolve") || message.contains("not found"))
+            {
+                return Err(AppError::GithubRepositoryNotFound);
+            }
+            if message.contains("pull request") || message.contains("pullrequest") {
+                return Err(AppError::PullRequestNotFound { number });
+            }
+            return Err(AppError::GithubApiUnavailable { retryable: true });
+        }
         let pr = root
             .pointer("/data/repository/pullRequest")
             .cloned()
@@ -239,6 +259,17 @@ fn fetch_pr_pages(
         after = Some(cursor);
     }
     Ok((first_pr.ok_or(AppError::GithubResponseInvalid)?, nodes))
+}
+
+fn classify_gh_failure(stderr: &[u8]) -> AppError {
+    let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if message.contains("auth") || message.contains("login") || message.contains("token") {
+        AppError::GithubAuthRequired
+    } else if message.contains("rate limit") {
+        AppError::GithubRateLimited
+    } else {
+        AppError::GithubApiUnavailable { retryable: true }
+    }
 }
 
 fn identity_from_remote(url: &str) -> Option<RepositoryIdentity> {

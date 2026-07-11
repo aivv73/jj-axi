@@ -27,6 +27,20 @@ fn fake_gh(json: &str) -> TempDir {
     directory
 }
 
+fn failing_gh(message: &str) -> TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("gh");
+    fs::write(
+        &script,
+        format!("#!/bin/sh\nprintf '%s' '{}' >&2\nexit 1\n", message),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(script, permissions).unwrap();
+    directory
+}
+
 fn run_with_gh(repo: &Path, gh: &Path, args: &[&str]) -> std::process::Output {
     let config = repo.join(".jj").join("jj-axi-test-config.toml");
     Command::new(env!("CARGO_BIN_EXE_jj-axi"))
@@ -67,6 +81,21 @@ fn explicit_pr_status_derives_readiness_and_check_counts() {
     assert!(text.contains("status: pending"));
     assert!(text.contains("ready_to_merge: false"));
     assert!(text.contains("blocking_reasons[1]: checks_pending"));
+}
+
+#[test]
+fn pr_status_normalizes_auth_failures_without_leaking_stderr() {
+    let repo = repository();
+    let gh = failing_gh("authentication token secret-value required");
+    let output = run_with_gh(
+        repo.path(),
+        gh.path(),
+        &["pr", "status", "7", "--repo", "acme/project"],
+    );
+    assert!(!output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("code: github_auth_required"));
+    assert!(!text.contains("secret-value"));
 }
 
 #[test]

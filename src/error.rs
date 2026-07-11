@@ -192,6 +192,11 @@ pub enum AppError {
         candidates: Vec<String>,
     },
     GithubCliNotFound,
+    GithubAuthRequired,
+    PullRequestNotFound {
+        number: u64,
+    },
+    GithubRateLimited,
     GithubApiUnavailable {
         retryable: bool,
     },
@@ -415,6 +420,19 @@ impl AppError {
             Self::GithubCliNotFound => ToonValue::Object(vec![
                 ("code", string("github_cli_not_found")),
                 ("retryable", ToonValue::Bool(false)),
+            ]),
+            Self::GithubAuthRequired => ToonValue::Object(vec![
+                ("code", string("github_auth_required")),
+                ("retryable", ToonValue::Bool(false)),
+            ]),
+            Self::PullRequestNotFound { number } => ToonValue::Object(vec![
+                ("code", string("pull_request_not_found")),
+                ("number", ToonValue::UInt(*number)),
+                ("retryable", ToonValue::Bool(false)),
+            ]),
+            Self::GithubRateLimited => ToonValue::Object(vec![
+                ("code", string("github_rate_limited")),
+                ("retryable", ToonValue::Bool(true)),
             ]),
             Self::GithubApiUnavailable { retryable } => ToonValue::Object(vec![
                 ("code", string("github_api_unavailable")),
