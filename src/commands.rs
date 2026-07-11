@@ -1,0 +1,121 @@
+use std::io::Write as _;
+use std::path::Path;
+use std::process::ExitCode;
+
+use crate::cli::{CommandInput, ParsedCli};
+use crate::error::AppError;
+use crate::jj_bridge::JjBridge;
+use crate::model::{Response, ResponseData, ResponseKind};
+use crate::toon::{ToonValue, render};
+
+pub(crate) async fn run(parsed: ParsedCli, cwd: &Path) -> ExitCode {
+    match parsed {
+        ParsedCli::Help(error) => match error.print() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::FAILURE,
+        },
+        ParsedCli::InvalidArgument {
+            argument,
+            constraint,
+        } => emit_error(AppError::InvalidArgument {
+            argument,
+            constraint,
+        }),
+        ParsedCli::Command(command) => match execute(command, cwd).await {
+            Ok(response) => emit_success(response),
+            Err(error) => emit_error(error),
+        },
+    }
+}
+
+async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError> {
+    let mut bridge = JjBridge::open(cwd).await?;
+    match command {
+        CommandInput::New { message } => Ok(Response {
+            kind: ResponseKind::New,
+            data: ResponseData::New(bridge.create_change(message.as_deref()).await?),
+        }),
+        CommandInput::Describe { change, message } => Ok(Response {
+            kind: ResponseKind::Describe,
+            data: ResponseData::Describe(bridge.describe_change(&change, &message).await?),
+        }),
+        CommandInput::Checkpoint { message } => Ok(Response {
+            kind: ResponseKind::Checkpoint,
+            data: ResponseData::Checkpoint(bridge.checkpoint(&message).await?),
+        }),
+        CommandInput::Finish {
+            change,
+            message,
+            bookmark,
+        } => Ok(Response {
+            kind: ResponseKind::Finish,
+            data: ResponseData::Finish(
+                bridge
+                    .finish_change(&change, message.as_deref(), bookmark.as_deref())
+                    .await?,
+            ),
+        }),
+        CommandInput::Inspect => Ok(Response {
+            kind: ResponseKind::Inspect,
+            data: ResponseData::Inspect(bridge.inspect().await?),
+        }),
+        CommandInput::Log {
+            limit,
+            conflicted,
+            fields,
+        } => Ok(Response {
+            kind: ResponseKind::Log,
+            data: ResponseData::Log(bridge.log(limit, conflicted, &fields).await?),
+        }),
+        CommandInput::Show { change, full } => Ok(Response {
+            kind: ResponseKind::Show,
+            data: ResponseData::Show(bridge.show(&change, full).await?),
+        }),
+        CommandInput::Diff { change, full } => Ok(Response {
+            kind: ResponseKind::Diff,
+            data: ResponseData::Diff(bridge.diff(change.as_deref(), full).await?),
+        }),
+        CommandInput::Split {
+            change,
+            hunks,
+            into,
+        } => Ok(Response {
+            kind: ResponseKind::Split,
+            data: ResponseData::Split(bridge.split_change(&change, &hunks, &into).await?),
+        }),
+        CommandInput::Move { from, to, hunks } => Ok(Response {
+            kind: ResponseKind::Move,
+            data: ResponseData::Move(bridge.move_hunks(&from, &to, &hunks).await?),
+        }),
+        CommandInput::Absorb { dry_run } => Ok(Response {
+            kind: ResponseKind::Absorb,
+            data: ResponseData::Absorb(bridge.absorb(dry_run).await?),
+        }),
+        CommandInput::Reorder { sequence } => Ok(Response {
+            kind: ResponseKind::Reorder,
+            data: ResponseData::Reorder(bridge.reorder(&sequence).await?),
+        }),
+    }
+}
+
+fn emit_success(response: Response) -> ExitCode {
+    emit(response.to_toon_value(), ExitCode::SUCCESS)
+}
+
+fn emit_error(error: AppError) -> ExitCode {
+    let envelope = ToonValue::Object(vec![
+        ("schema_version", ToonValue::UInt(1)),
+        ("kind", ToonValue::String("error".to_owned())),
+        ("error", error.to_toon_value()),
+    ]);
+    emit(envelope, ExitCode::FAILURE)
+}
+
+fn emit(value: ToonValue, success: ExitCode) -> ExitCode {
+    let output = render(&value);
+    let mut stdout = std::io::stdout().lock();
+    if stdout.write_all(output.as_bytes()).is_err() {
+        return ExitCode::FAILURE;
+    }
+    success
+}
