@@ -187,6 +187,11 @@ pub enum AppError {
         operation_id: String,
         reason: &'static str,
     },
+    GithubCliNotFound,
+    GithubApiUnavailable {
+        retryable: bool,
+    },
+    GithubResponseInvalid,
     Internal,
 }
 
@@ -389,6 +394,18 @@ impl AppError {
                 ("code", string("operation_target_unsafe")),
                 ("operation_id", string(operation_id)),
                 ("reason", string(reason)),
+            ]),
+            Self::GithubCliNotFound => ToonValue::Object(vec![
+                ("code", string("github_cli_not_found")),
+                ("retryable", ToonValue::Bool(false)),
+            ]),
+            Self::GithubApiUnavailable { retryable } => ToonValue::Object(vec![
+                ("code", string("github_api_unavailable")),
+                ("retryable", ToonValue::Bool(*retryable)),
+            ]),
+            Self::GithubResponseInvalid => ToonValue::Object(vec![
+                ("code", string("github_response_invalid")),
+                ("retryable", ToonValue::Bool(false)),
             ]),
             Self::Internal => ToonValue::Object(vec![("code", string("internal"))]),
         }

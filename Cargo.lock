@@ -1953,6 +1953,7 @@ dependencies = [
  "futures",
  "jj-cli",
  "jj-lib",
+ "serde_json",
  "similar",
  "tempfile",
  "tokio",

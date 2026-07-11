@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use crate::cli::{CommandInput, ParsedCli};
 use crate::error::AppError;
+use crate::github_bridge;
 use crate::jj_bridge::JjBridge;
 use crate::model::{Response, ResponseData, ResponseKind};
 use crate::toon::{ToonValue, render};
@@ -29,6 +30,16 @@ pub(crate) async fn run(parsed: ParsedCli, cwd: &Path) -> ExitCode {
 }
 
 async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError> {
+    if let CommandInput::PrStatus { number, repository } = &command {
+        return Ok(Response {
+            kind: ResponseKind::PrStatus,
+            data: ResponseData::PrStatus(github_bridge::pr_status(
+                cwd,
+                *number,
+                repository.as_deref(),
+            )?),
+        });
+    }
     if let CommandInput::Operations { limit } = command {
         return Ok(Response {
             kind: ResponseKind::Operations,
@@ -148,7 +159,9 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
                     .await?,
             ),
         }),
-        CommandInput::Operations { .. } | CommandInput::BookmarkList { .. } => {
+        CommandInput::Operations { .. }
+        | CommandInput::BookmarkList { .. }
+        | CommandInput::PrStatus { .. } => {
             unreachable!("handled before repository synchronization")
         }
     }

@@ -78,6 +78,10 @@ pub enum CommandInput {
         name: String,
         remote: Option<String>,
     },
+    PrStatus {
+        number: u64,
+        repository: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -185,6 +189,20 @@ enum Command {
     Bookmark {
         #[command(subcommand)]
         command: BookmarkCommand,
+    },
+    Pr {
+        #[command(subcommand)]
+        command: PrCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum PrCommand {
+    Status {
+        #[arg(value_parser = parse_positive_u64)]
+        number: u64,
+        #[arg(long = "repo")]
+        repository: Option<String>,
     },
 }
 
@@ -307,6 +325,9 @@ where
             Command::Bookmark {
                 command: BookmarkCommand::Push { name, remote },
             } => CommandInput::BookmarkPush { name, remote },
+            Command::Pr {
+                command: PrCommand::Status { number, repository },
+            } => CommandInput::PrStatus { number, repository },
         }),
         Err(error) if error.kind() == ErrorKind::DisplayHelp => ParsedCli::Help(error),
         Err(_) => ParsedCli::InvalidArgument {
@@ -314,6 +335,16 @@ where
             constraint: "valid_command_syntax",
         },
     }
+}
+
+fn parse_positive_u64(value: &str) -> Result<u64, String> {
+    let number = value
+        .parse::<u64>()
+        .map_err(|_| "must be a positive integer".to_owned())?;
+    if number == 0 {
+        return Err("must be greater than zero".to_owned());
+    }
+    Ok(number)
 }
 
 fn parse_limit(value: &str) -> Result<usize, String> {

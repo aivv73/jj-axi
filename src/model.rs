@@ -883,6 +883,71 @@ impl BookmarkPushData {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrChecks {
+    pub total: u64,
+    pub passed: u64,
+    pub failed: u64,
+    pub pending: u64,
+    pub skipped: u64,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrStatusData {
+    pub repository: String,
+    pub number: u64,
+    pub url: String,
+    pub state: String,
+    pub draft: bool,
+    pub head_ref: String,
+    pub head_commit_id: String,
+    pub base_ref: String,
+    pub mergeability: String,
+    pub review: String,
+    pub checks: PrChecks,
+    pub ready_to_merge: bool,
+    pub blocking_reasons: Vec<String>,
+}
+
+impl PrStatusData {
+    pub fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("repository", string(&self.repository)),
+            ("number", ToonValue::UInt(self.number)),
+            ("url", string(&self.url)),
+            ("state", string(&self.state)),
+            ("draft", ToonValue::Bool(self.draft)),
+            (
+                "head",
+                ToonValue::Object(vec![
+                    ("ref", string(&self.head_ref)),
+                    ("commit_id", string(&self.head_commit_id)),
+                ]),
+            ),
+            (
+                "base",
+                ToonValue::Object(vec![("ref", string(&self.base_ref))]),
+            ),
+            ("mergeability", string(&self.mergeability)),
+            ("review", string(&self.review)),
+            (
+                "checks",
+                ToonValue::Object(vec![
+                    ("total", ToonValue::UInt(self.checks.total)),
+                    ("passed", ToonValue::UInt(self.checks.passed)),
+                    ("failed", ToonValue::UInt(self.checks.failed)),
+                    ("pending", ToonValue::UInt(self.checks.pending)),
+                    ("skipped", ToonValue::UInt(self.checks.skipped)),
+                    ("status", string(&self.checks.status)),
+                ]),
+            ),
+            ("ready_to_merge", ToonValue::Bool(self.ready_to_merge)),
+            ("blocking_reasons", string_array(&self.blocking_reasons)),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResponseKind {
     New,
     Describe,
@@ -901,6 +966,7 @@ pub enum ResponseKind {
     BookmarkList,
     BookmarkSet,
     BookmarkPush,
+    PrStatus,
 }
 
 impl ResponseKind {
@@ -923,6 +989,7 @@ impl ResponseKind {
             Self::BookmarkList => "bookmark_list",
             Self::BookmarkSet => "bookmark_set",
             Self::BookmarkPush => "bookmark_push",
+            Self::PrStatus => "pr_status",
         })
     }
 }
@@ -946,6 +1013,7 @@ pub enum ResponseData {
     BookmarkList(BookmarkListData),
     BookmarkSet(BookmarkSetData),
     BookmarkPush(BookmarkPushData),
+    PrStatus(PrStatusData),
 }
 
 impl ResponseData {
@@ -968,6 +1036,7 @@ impl ResponseData {
             Self::BookmarkList(data) => data.to_toon_value(),
             Self::BookmarkSet(data) => data.to_toon_value(),
             Self::BookmarkPush(data) => data.to_toon_value(),
+            Self::PrStatus(data) => data.to_toon_value(),
         }
     }
 }
