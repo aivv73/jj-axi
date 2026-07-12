@@ -105,6 +105,202 @@ fn assert_error_clean(output: Output, code: &str) -> String {
 }
 
 #[test]
+fn partition_preserves_merge_source_parents() {
+    let directory = repository();
+    write(directory.path(), "base.txt", b"base\n");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "left"])
+            .status
+            .success()
+    );
+    write(directory.path(), "left.txt", b"left\n");
+    let left = change_id(directory.path(), "left");
+    assert!(
+        run_jj(directory.path(), &["new", "root()", "-m", "right"])
+            .status
+            .success()
+    );
+    write(directory.path(), "right.txt", b"right\n");
+    let right = change_id(directory.path(), "right");
+    assert!(
+        run_jj(directory.path(), &["new", &left, &right, "-m", "merge"])
+            .status
+            .success()
+    );
+    write(directory.path(), "merge.txt", b"merge\n");
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .unwrap();
+    let manifest = serde_json::json!({
+        "schema_version": 1, "source_commit_id": commit_id,
+        "parts": [{"description": "merge part", "hunks": [{"path": "merge.txt", "lines": "1"}]}],
+        "remainder": {"destination": "require_empty"}
+    });
+    fs::write(
+        directory.path().join(".jj/merge.json"),
+        manifest.to_string(),
+    )
+    .unwrap();
+    successful_output(
+        directory.path(),
+        &["partition", "@", "--spec-file", ".jj/merge.json"],
+    );
+    assert_eq!(
+        jj_ok(
+            directory.path(),
+            &["log", "--no-graph", "-r", "@", "-T", "parents.len()"]
+        ),
+        "2"
+    );
+}
+
+#[test]
+fn partition_reports_conflicted_side_descendant_rewrites() {
+    let directory = repository();
+    write(directory.path(), "sample.txt", b"one\ntwo\nthree\nfour\n");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "source"])
+            .status
+            .success()
+    );
+    write(directory.path(), "sample.txt", b"one\nTWO\nthree\nFOUR\n");
+    let source = change_id(directory.path(), "source");
+    let inventory = successful_output(directory.path(), &["diff", &source, "--hunks"]);
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .unwrap();
+    assert!(
+        run_jj(directory.path(), &["new", &source, "-m", "side"])
+            .status
+            .success()
+    );
+    write(directory.path(), "sample.txt", b"one\nSIDE\nthree\nFOUR\n");
+    assert!(
+        run_jj(directory.path(), &["bookmark", "create", "side"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", &source, "-m", "working"])
+            .status
+            .success()
+    );
+    write(directory.path(), "working.txt", b"working\n");
+    let manifest = serde_json::json!({
+        "schema_version": 1, "source_commit_id": commit_id,
+        "parts": [{"description": "selected", "hunks": [{"path": "sample.txt", "lines": "4"}]}],
+        "remainder": {"destination": "working_copy"}
+    });
+    fs::write(
+        directory.path().join(".jj/conflict.json"),
+        manifest.to_string(),
+    )
+    .unwrap();
+    let output = successful_output(
+        directory.path(),
+        &["partition", &source, "--spec-file", ".jj/conflict.json"],
+    );
+    assert!(output.contains("rewritten_descendants:\n    total_count: 2"));
+    assert!(output.contains("conflicted_count: 1"));
+    assert!(output.contains("affected_bookmarks:\n    total_count: 1"));
+    assert!(output.contains("names[1]: side"));
+    assert!(output.contains("conflicted: true"));
+}
+
+#[test]
+fn partition_working_copy_rejects_another_workspace_editing_source() {
+    let directory = repository();
+    write(directory.path(), "sample.txt", b"content\n");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "mixed"])
+            .status
+            .success()
+    );
+    let source = successful_output(directory.path(), &["inspect"])
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("change_id: "))
+        .unwrap()
+        .to_owned();
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .unwrap();
+    let other_root = tempfile::tempdir().unwrap();
+    let other = other_root.path().join("workspace");
+    assert!(
+        run_jj(
+            directory.path(),
+            &["workspace", "add", other.to_str().unwrap(), "-r", "@"]
+        )
+        .status
+        .success()
+    );
+    assert!(run_jj(&other, &["edit", &source]).status.success());
+    let manifest = serde_json::json!({
+        "schema_version": 1, "source_commit_id": commit_id,
+        "parts": [{"description": "content", "hunks": [{"path": "sample.txt", "lines": "1"}]}],
+        "remainder": {"destination": "working_copy"}
+    });
+    fs::write(
+        directory.path().join(".jj/workspace.json"),
+        manifest.to_string(),
+    )
+    .unwrap();
+    let error = assert_error_clean(
+        run_axi(
+            directory.path(),
+            &["partition", "@", "--spec-file", ".jj/workspace.json"],
+        ),
+        "partition_working_copy_unsafe",
+    );
+    assert!(error.contains("workspace"));
+
+    let remaining_manifest = serde_json::json!({
+        "schema_version": 1, "source_commit_id": commit_id,
+        "parts": [{"description": "content", "hunks": [{"path": "sample.txt", "lines": "1"}]}],
+        "remainder": {"destination": "remaining_change"}
+    });
+    fs::write(
+        directory.path().join(".jj/workspace.json"),
+        remaining_manifest.to_string(),
+    )
+    .unwrap();
+    let output = successful_output(
+        directory.path(),
+        &["partition", "@", "--spec-file", ".jj/workspace.json"],
+    );
+    assert!(output.contains("affected_workspaces:\n    total_count: 2"));
+    assert!(
+        jj_ok(
+            directory.path(),
+            &["log", "--no-graph", "-r", "@", "-T", "description"]
+        )
+        .contains("mixed")
+    );
+    assert!(
+        jj_ok(
+            &other,
+            &["log", "--no-graph", "-r", "@", "-T", "description"]
+        )
+        .contains("mixed")
+    );
+}
+
+#[test]
 fn partition_routes_current_remainder_to_a_fresh_working_copy_change() {
     let directory = repository();
     write(directory.path(), "sample.txt", b"one\ntwo\nthree\nfour\n");
@@ -196,7 +392,7 @@ fn partition_routes_ancestor_remainder_into_existing_working_copy_content() {
             ".jj/ancestor-working.json",
         ],
     );
-    assert!(output.contains("rewritten_descendant_count: 1"));
+    assert!(output.contains("rewritten_descendants:\n    total_count: 1"));
     let working_patch = jj_ok(directory.path(), &["diff", "-r", "@", "--git"]);
     assert_eq!(
         changed_lines(&working_patch),

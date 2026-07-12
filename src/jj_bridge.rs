@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
 use std::io;
@@ -70,9 +69,9 @@ use crate::model::{
     CurrentChange, DescribeData, DescriptionAction, DiffData, DiffSnapshot, DiffStat, DiffTarget,
     FinishData, FinishPublication, HistoryChange, HunkRef, InspectData, LocalBookmarkAction,
     LogData, LogEntry, MoveData, NewData, OperationEntry, OperationKind, OperationsData,
-    PartitionPreviewData, PartitionPreviewPart, Patch, RemoteBookmarkAction, ReorderData, ShowData,
-    SkippedPath, SplitData, SquashData, Status, Truncation, UndoAction, UndoData, UndoSelection,
-    UndoTarget, UnmovedHunk,
+    PartitionChangeSummary, PartitionNameSummary, PartitionPreviewData, PartitionPreviewPart,
+    Patch, RemoteBookmarkAction, ReorderData, ShowData, SkippedPath, SplitData, SquashData, Status,
+    Truncation, UndoAction, UndoData, UndoSelection, UndoTarget, UnmovedHunk,
 };
 use crate::partition::{
     LoadedManifest, ManifestHunk, PartitionManifest, PartitionPart, PartitionRemainder,
@@ -718,6 +717,59 @@ impl JjBridge {
         })
     }
 
+    async fn partition_impact(&self, source: &Commit) -> Result<PartitionImpact, AppError> {
+        let expression = RevsetExpression::commits(vec![source.id().clone()]).descendants();
+        let revset =
+            expression
+                .evaluate(self.repo.as_ref())
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "partition_impact",
+                })?;
+        let mut stream = revset.stream().commits(self.repo.store());
+        let mut commits = Vec::new();
+        while let Some(commit) = stream
+            .try_next()
+            .await
+            .map_err(|_| AppError::BackendFailure {
+                operation: "partition_impact",
+            })?
+        {
+            commits.push(commit);
+        }
+        let commit_ids: HashSet<_> = commits.iter().map(|commit| commit.id().clone()).collect();
+        let mut descendants: Vec<_> = commits
+            .iter()
+            .filter(|commit| commit.id() != source.id())
+            .map(history_change_from_commit)
+            .collect();
+        descendants.sort_by(|left, right| left.change_id.cmp(&right.change_id));
+        let mut bookmarks = Vec::new();
+        for commit in &commits {
+            bookmarks.extend(
+                self.repo
+                    .view()
+                    .local_bookmarks_for_commit(commit.id())
+                    .map(|(name, _)| name.as_str().to_owned()),
+            );
+        }
+        bookmarks.sort();
+        bookmarks.dedup();
+        let mut workspaces: Vec<_> = self
+            .repo
+            .view()
+            .wc_commit_ids()
+            .iter()
+            .filter(|(_, commit_id)| commit_ids.contains(*commit_id))
+            .map(|(name, _)| name.as_str().to_owned())
+            .collect();
+        workspaces.sort();
+        Ok(PartitionImpact {
+            descendants,
+            bookmarks,
+            workspaces,
+        })
+    }
+
     pub(crate) async fn preview_partition(
         &self,
         revision: &str,
@@ -726,6 +778,7 @@ impl JjBridge {
     ) -> Result<PartitionPreviewData, AppError> {
         let source = self.resolve_one(revision).await?;
         self.ensure_rewritable(self.repo.as_ref(), &source).await?;
+        let impact = self.partition_impact(&source).await?;
         let current_commit_id = source.id().to_string();
         if loaded.manifest.source_commit_id != current_commit_id {
             return Err(AppError::StalePartitionSource {
@@ -814,9 +867,16 @@ impl JjBridge {
             parts,
             remainder_destination: loaded.manifest.remainder.destination.as_str().to_owned(),
             remainder_change_id: None,
+            remainder_conflicted: match loaded.manifest.remainder.destination {
+                RemainderDestination::RemainingChange => Some(source.has_conflict()),
+                RemainderDestination::WorkingCopy => current.as_ref().map(Commit::has_conflict),
+                RemainderDestination::RequireEmpty => None,
+            },
             remainder_hunk_count,
             skipped_path_count: analysis.skipped_paths.len() as u64,
-            rewritten_descendant_count: 0,
+            rewritten_descendants: partition_change_summary(impact.descendants),
+            affected_bookmarks: partition_name_summary(impact.bookmarks),
+            affected_workspaces: partition_name_summary(impact.workspaces),
             conflicted: source.has_conflict() || current.as_ref().is_some_and(Commit::has_conflict),
         })
     }
@@ -901,6 +961,7 @@ impl JjBridge {
     ) -> Result<PartitionPreviewData, AppError> {
         let source = self.resolve_one(revision).await?;
         self.ensure_rewritable(self.repo.as_ref(), &source).await?;
+        let impact = self.partition_impact(&source).await?;
         let current_commit_id = source.id().to_string();
         if loaded.manifest.source_commit_id != current_commit_id {
             return Err(AppError::StalePartitionSource {
@@ -1030,10 +1091,8 @@ impl JjBridge {
             .as_ref()
             .filter(|commit| commit.id() != source.id())
             .cloned();
-        let rewritten_descendant_count = Cell::new(0_u64);
         tx.repo_mut()
             .transform_descendants(vec![source.id().clone()], async |mut rewriter| {
-                rewritten_descendant_count.set(rewritten_descendant_count.get() + 1);
                 let is_working_destination = working_destination
                     .as_ref()
                     .is_some_and(|commit| commit.id() == rewriter.old_commit().id());
@@ -1076,6 +1135,14 @@ impl JjBridge {
             RemainderDestination::WorkingCopy => Some(self.current_commit().await?),
             RemainderDestination::RequireEmpty => None,
         };
+        let mut rewritten_descendants = Vec::with_capacity(impact.descendants.len());
+        for descendant in &impact.descendants {
+            rewritten_descendants.push(history_change_from_commit(
+                &self.resolve_one(&descendant.change_id).await?,
+            ));
+        }
+        let rewritten_summary = partition_change_summary(rewritten_descendants);
+        let conflicted_descendant_count = rewritten_summary.conflicted_count;
         let parts = realized
             .iter()
             .enumerate()
@@ -1100,11 +1167,15 @@ impl JjBridge {
             remainder_change_id: destination
                 .as_ref()
                 .map(|commit| commit.change_id().to_string()),
+            remainder_conflicted: destination.as_ref().map(Commit::has_conflict),
             remainder_hunk_count,
             skipped_path_count,
-            rewritten_descendant_count: rewritten_descendant_count.get(),
+            rewritten_descendants: rewritten_summary,
+            affected_bookmarks: partition_name_summary(impact.bookmarks),
+            affected_workspaces: partition_name_summary(impact.workspaces),
             conflicted: realized.iter().any(Commit::has_conflict)
-                || destination.as_ref().is_some_and(Commit::has_conflict),
+                || destination.as_ref().is_some_and(Commit::has_conflict)
+                || conflicted_descendant_count > 0,
         })
     }
 
@@ -3468,6 +3539,12 @@ struct LineHunk {
     reference: HunkRef,
 }
 
+struct PartitionImpact {
+    descendants: Vec<HistoryChange>,
+    bookmarks: Vec<String>,
+    workspaces: Vec<String>,
+}
+
 struct TextHunkAnalysis {
     hunks: Vec<HunkRef>,
     skipped_paths: Vec<SkippedPath>,
@@ -3582,6 +3659,29 @@ fn selected_text_by_hunks(
         }
     }
     selected
+}
+
+fn partition_change_summary(changes: Vec<HistoryChange>) -> PartitionChangeSummary {
+    let total_count = changes.len() as u64;
+    let conflicted_count = changes
+        .iter()
+        .filter(|change| change.status.conflicted)
+        .count() as u64;
+    PartitionChangeSummary {
+        total_count,
+        conflicted_count,
+        complete: changes.len() <= 100,
+        changes: changes.into_iter().take(100).collect(),
+    }
+}
+
+fn partition_name_summary(names: Vec<String>) -> PartitionNameSummary {
+    let total_count = names.len() as u64;
+    PartitionNameSummary {
+        total_count,
+        complete: names.len() <= 100,
+        names: names.into_iter().take(100).collect(),
+    }
 }
 
 fn partition_hunk_error(error: AppError, part_ordinal: u64) -> AppError {

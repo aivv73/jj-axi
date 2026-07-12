@@ -462,6 +462,50 @@ impl PartitionPreviewPart {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PartitionChangeSummary {
+    pub total_count: u64,
+    pub conflicted_count: u64,
+    pub complete: bool,
+    pub changes: Vec<HistoryChange>,
+}
+
+impl PartitionChangeSummary {
+    fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("total_count", ToonValue::UInt(self.total_count)),
+            ("conflicted_count", ToonValue::UInt(self.conflicted_count)),
+            ("complete", ToonValue::Bool(self.complete)),
+            (
+                "changes",
+                ToonValue::Array(
+                    self.changes
+                        .iter()
+                        .map(HistoryChange::to_toon_value)
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PartitionNameSummary {
+    pub total_count: u64,
+    pub complete: bool,
+    pub names: Vec<String>,
+}
+
+impl PartitionNameSummary {
+    fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("total_count", ToonValue::UInt(self.total_count)),
+            ("complete", ToonValue::Bool(self.complete)),
+            ("names", string_array(&self.names)),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PartitionPreviewData {
     pub dry_run: bool,
     pub manifest_sha256: String,
@@ -470,9 +514,12 @@ pub struct PartitionPreviewData {
     pub parts: Vec<PartitionPreviewPart>,
     pub remainder_destination: String,
     pub remainder_change_id: Option<String>,
+    pub remainder_conflicted: Option<bool>,
     pub remainder_hunk_count: u64,
     pub skipped_path_count: u64,
-    pub rewritten_descendant_count: u64,
+    pub rewritten_descendants: PartitionChangeSummary,
+    pub affected_bookmarks: PartitionNameSummary,
+    pub affected_workspaces: PartitionNameSummary,
     pub conflicted: bool,
 }
 
@@ -502,6 +549,11 @@ impl PartitionPreviewData {
                             .as_ref()
                             .map_or(ToonValue::Null, |id| string(id)),
                     ),
+                    (
+                        "conflicted",
+                        self.remainder_conflicted
+                            .map_or(ToonValue::Null, ToonValue::Bool),
+                    ),
                     ("hunk_count", ToonValue::UInt(self.remainder_hunk_count)),
                     (
                         "skipped_path_count",
@@ -510,8 +562,16 @@ impl PartitionPreviewData {
                 ]),
             ),
             (
-                "rewritten_descendant_count",
-                ToonValue::UInt(self.rewritten_descendant_count),
+                "rewritten_descendants",
+                self.rewritten_descendants.to_toon_value(),
+            ),
+            (
+                "affected_bookmarks",
+                self.affected_bookmarks.to_toon_value(),
+            ),
+            (
+                "affected_workspaces",
+                self.affected_workspaces.to_toon_value(),
             ),
             ("conflicted", ToonValue::Bool(self.conflicted)),
         ])
