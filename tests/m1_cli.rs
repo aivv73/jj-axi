@@ -4,6 +4,15 @@ use common::{repository, run_axi, successful_output};
 use std::fs;
 
 #[test]
+fn no_arguments_is_the_inspect_home_view() {
+    let directory = repository();
+    let home = successful_output(directory.path(), &[]);
+    let inspect = successful_output(directory.path(), &["inspect"]);
+    assert_eq!(home, inspect);
+    assert!(home.contains("kind: inspect"));
+}
+
+#[test]
 fn read_commands_snapshot_and_report_a_working_copy_change() {
     let directory = repository();
     fs::write(directory.path().join("alpha.txt"), "one\ntwo\n").expect("write fixture file");

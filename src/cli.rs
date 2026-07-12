@@ -120,7 +120,7 @@ pub enum LogField {
 #[command(disable_help_subcommand = true)]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -272,7 +272,10 @@ where
     T: Into<std::ffi::OsString> + Clone,
 {
     match Cli::try_parse_from(args) {
-        Ok(cli) => ParsedCli::Command(match cli.command {
+        Ok(Cli { command: None }) => ParsedCli::Command(CommandInput::Inspect),
+        Ok(Cli {
+            command: Some(command),
+        }) => ParsedCli::Command(match command {
             Command::New { message } => CommandInput::New { message },
             Command::Describe { change, message } => CommandInput::Describe { change, message },
             Command::Checkpoint { message } => CommandInput::Checkpoint { message },
