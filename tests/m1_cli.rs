@@ -4,6 +4,18 @@ use common::{repository, run_axi, successful_output};
 use std::fs;
 
 #[test]
+fn version_reports_the_compiled_package_version_without_a_repository() {
+    let directory = tempfile::tempdir().expect("create temporary directory");
+    let output = run_axi(directory.path(), &["--version"]);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        concat!("jj-axi ", env!("CARGO_PKG_VERSION"))
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn no_arguments_is_the_inspect_home_view() {
     let directory = repository();
     let home = successful_output(directory.path(), &[]);

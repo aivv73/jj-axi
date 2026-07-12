@@ -117,7 +117,7 @@ pub enum LogField {
 }
 
 #[derive(Parser)]
-#[command(disable_help_subcommand = true)]
+#[command(disable_help_subcommand = true, version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -381,7 +381,14 @@ where
                 command: SetupCommand::Skill { output, force },
             } => CommandInput::SetupSkill { output, force },
         }),
-        Err(error) if error.kind() == ErrorKind::DisplayHelp => ParsedCli::Help(error),
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            ParsedCli::Help(error)
+        }
         Err(_) => ParsedCli::InvalidArgument {
             argument: "command_line",
             constraint: "valid_command_syntax",
