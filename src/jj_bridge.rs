@@ -1314,6 +1314,10 @@ impl JjBridge {
         };
         let source_change_id = source.change_id().clone();
         let destination_change_id = destination.change_id().clone();
+        let mut affected_change_ids = self.visible_descendant_change_ids(source.id()).await?;
+        affected_change_ids.extend(self.visible_descendant_change_ids(destination.id()).await?);
+        affected_change_ids.sort();
+        affected_change_ids.dedup();
         let parent_tree =
             source
                 .parent_tree(self.repo.as_ref())
@@ -1357,7 +1361,9 @@ impl JjBridge {
                 .history_change_by_change_id(&destination_change_id)
                 .await?,
             rebased_descendant_count,
-            conflict_count: self.visible_conflict_count().await?,
+            conflict_count: self
+                .conflict_count_for_changes(&affected_change_ids)
+                .await?,
         })
     }
 
@@ -1379,6 +1385,7 @@ impl JjBridge {
         };
         self.ensure_rewritable(self.repo.as_ref(), &source).await?;
         let change_id = source.change_id().clone();
+        let mut affected_change_ids = self.visible_descendant_change_ids(source.id()).await?;
         let mut affected_bookmarks: Vec<_> = self
             .repo
             .view()
@@ -1459,12 +1466,17 @@ impl JjBridge {
         )
         .await?;
         let current = self.current_commit().await?;
+        affected_change_ids.push(current.change_id().to_string());
+        affected_change_ids.sort();
+        affected_change_ids.dedup();
         Ok(AbandonData {
             change_id: change_id.to_string(),
             action: AbandonAction::Abandoned,
             affected_bookmarks,
             rebased_descendant_count,
-            conflict_count: self.visible_conflict_count().await?,
+            conflict_count: self
+                .conflict_count_for_changes(&affected_change_ids)
+                .await?,
             current_change: change_from_commit(&current),
         })
     }
@@ -1518,27 +1530,47 @@ impl JjBridge {
         Ok(false)
     }
 
-    async fn visible_descendant_count(&self, commit_id: &CommitId) -> Result<u64, AppError> {
-        let expression = RevsetExpression::commits(vec![commit_id.clone()])
-            .descendants()
-            .intersection(&RevsetExpression::commits(vec![commit_id.clone()]).negated());
+    async fn visible_descendant_change_ids(
+        &self,
+        commit_id: &CommitId,
+    ) -> Result<Vec<String>, AppError> {
+        let expression = RevsetExpression::commits(vec![commit_id.clone()]).descendants();
         let revset =
             expression
                 .evaluate(self.repo.as_ref())
                 .map_err(|_| AppError::BackendFailure {
                     operation: "read_descendants",
                 })?;
-        let mut stream = revset.stream();
-        let mut count = 0;
-        while stream
+        let mut stream = revset.stream().commits(self.repo.store());
+        let mut change_ids = Vec::new();
+        while let Some(commit) = stream
             .try_next()
             .await
             .map_err(|_| AppError::BackendFailure {
                 operation: "read_descendants",
             })?
-            .is_some()
         {
-            count += 1;
+            change_ids.push(commit.change_id().to_string());
+        }
+        Ok(change_ids)
+    }
+
+    async fn visible_descendant_count(&self, commit_id: &CommitId) -> Result<u64, AppError> {
+        Ok(self
+            .visible_descendant_change_ids(commit_id)
+            .await?
+            .len()
+            .saturating_sub(1) as u64)
+    }
+
+    async fn conflict_count_for_changes(&self, change_ids: &[String]) -> Result<u64, AppError> {
+        let mut count = 0;
+        for change_id in change_ids {
+            match self.resolve_one(change_id).await {
+                Ok(commit) if commit.has_conflict() => count += 1,
+                Ok(_) | Err(AppError::RevisionNotFound { .. }) => {}
+                Err(error) => return Err(error),
+            }
         }
         Ok(count)
     }
