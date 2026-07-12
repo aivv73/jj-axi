@@ -60,6 +60,14 @@ Snapshot the current work into a described change and open a fresh child:
 jj-axi checkpoint --message "complete token refresh"
 ```
 
+Create or update a local bookmark without contacting a remote:
+
+```bash
+jj-axi bookmark set feature-name --to <change>
+```
+
+Use `bookmark set` when a task asks for a local branch, bookmark, or Git-visible ref but does not ask to publish or push. Do not use `finish --bookmark` for local-only completion.
+
 Validate readiness without publication:
 
 ```bash
