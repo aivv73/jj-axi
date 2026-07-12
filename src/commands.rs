@@ -146,6 +146,22 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
             kind: ResponseKind::Absorb,
             data: ResponseData::Absorb(bridge.absorb(dry_run).await?),
         }),
+        CommandInput::Squash {
+            change,
+            destination,
+            message,
+        } => Ok(Response {
+            kind: ResponseKind::Squash,
+            data: ResponseData::Squash(
+                bridge
+                    .squash(&change, destination.as_deref(), message.as_deref())
+                    .await?,
+            ),
+        }),
+        CommandInput::Abandon { change } => Ok(Response {
+            kind: ResponseKind::Abandon,
+            data: ResponseData::Abandon(bridge.abandon(&change).await?),
+        }),
         CommandInput::Reorder { sequence } => Ok(Response {
             kind: ResponseKind::Reorder,
             data: ResponseData::Reorder(bridge.reorder(&sequence).await?),

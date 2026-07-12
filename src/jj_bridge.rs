@@ -45,7 +45,8 @@ use jj_lib::revset::{
     RevsetWorkspaceContext, SymbolResolver,
 };
 use jj_lib::rewrite::{
-    CommitRewriter, CommitWithSelection, RebaseOptions, merge_commit_trees, squash_commits,
+    CommitRewriter, CommitWithSelection, RebaseOptions, RewriteRefsOptions, merge_commit_trees,
+    squash_commits,
 };
 use jj_lib::settings::UserSettings;
 use jj_lib::signing::SignBehavior;
@@ -62,13 +63,14 @@ use crate::error::{
     RemoteBookmarkRejectReason, RewritabilityReason,
 };
 use crate::model::{
-    AbsorbData, AbsorbMove, AbsorbSourceAction, BookmarkComparisonStatus, BookmarkEntry,
-    BookmarkListData, BookmarkPushData, BookmarkRemoteState, BookmarkSetData, BookmarkTargetState,
-    Change, CheckpointData, CurrentChange, DescribeData, DescriptionAction, DiffData, DiffStat,
-    DiffTarget, FinishData, FinishPublication, HistoryChange, HunkRef, InspectData,
-    LocalBookmarkAction, LogData, LogEntry, MoveData, NewData, OperationEntry, OperationKind,
-    OperationsData, Patch, RemoteBookmarkAction, ReorderData, ShowData, SkippedPath, SplitData,
-    Status, Truncation, UndoAction, UndoData, UndoSelection, UndoTarget, UnmovedHunk,
+    AbandonAction, AbandonData, AbsorbData, AbsorbMove, AbsorbSourceAction,
+    BookmarkComparisonStatus, BookmarkEntry, BookmarkListData, BookmarkPushData,
+    BookmarkRemoteState, BookmarkSetData, BookmarkTargetState, Change, CheckpointData,
+    CurrentChange, DescribeData, DescriptionAction, DiffData, DiffStat, DiffTarget, FinishData,
+    FinishPublication, HistoryChange, HunkRef, InspectData, LocalBookmarkAction, LogData, LogEntry,
+    MoveData, NewData, OperationEntry, OperationKind, OperationsData, Patch, RemoteBookmarkAction,
+    ReorderData, ShowData, SkippedPath, SplitData, SquashData, Status, Truncation, UndoAction,
+    UndoData, UndoSelection, UndoTarget, UnmovedHunk,
 };
 
 const DEFAULT_PATCH_LIMIT_BYTES: u64 = 16 * 1024;
@@ -1258,6 +1260,263 @@ impl JjBridge {
         Ok(data)
     }
 
+    pub(crate) async fn squash(
+        &mut self,
+        source_revision: &str,
+        destination_revision: Option<&str>,
+        message: Option<&str>,
+    ) -> Result<SquashData, AppError> {
+        let source = self.resolve_one(source_revision).await?;
+        self.ensure_rewritable(self.repo.as_ref(), &source).await?;
+        let destination = if let Some(revision) = destination_revision {
+            self.resolve_one(revision).await?
+        } else {
+            let [parent_id] = source.parent_ids() else {
+                return Err(AppError::SquashDestinationRequired {
+                    source_change_id: source.change_id().to_string(),
+                });
+            };
+            self.commit_by_id(parent_id).await?
+        };
+        self.ensure_rewritable(self.repo.as_ref(), &destination)
+            .await?;
+        if source.id() == destination.id()
+            || self
+                .repo
+                .index()
+                .is_ancestor(source.id(), destination.id())
+                .unwrap_or(false)
+        {
+            return Err(AppError::InvalidHistoryShape {
+                operation: "squash".to_owned(),
+                reason: "destination_is_source_or_descendant".to_owned(),
+                change_ids: vec![
+                    source.change_id().to_string(),
+                    destination.change_id().to_string(),
+                ],
+            });
+        }
+        let description = match (
+            source.description().is_empty(),
+            destination.description().is_empty(),
+            message,
+        ) {
+            (_, _, Some(message)) => normalize_message(message),
+            (false, false, None) => {
+                return Err(AppError::SquashMessageRequired {
+                    source_change_id: source.change_id().to_string(),
+                    destination_change_id: destination.change_id().to_string(),
+                });
+            }
+            (false, true, None) => source.description().to_owned(),
+            (_, false, None) => destination.description().to_owned(),
+            (true, true, None) => String::new(),
+        };
+        let source_change_id = source.change_id().clone();
+        let destination_change_id = destination.change_id().clone();
+        let parent_tree =
+            source
+                .parent_tree(self.repo.as_ref())
+                .await
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "squash",
+                })?;
+        let selection = CommitWithSelection {
+            commit: source.clone(),
+            selected_tree: source.tree(),
+            parent_tree,
+        };
+        let rebased_descendant_count = self.visible_descendant_count(source.id()).await?;
+        let mut tx = self.start_transaction("squash");
+        let squashed = squash_commits(
+            tx.repo_mut(),
+            std::slice::from_ref(&selection),
+            &destination,
+            false,
+        )
+        .await
+        .map_err(|_| AppError::BackendFailure {
+            operation: "squash",
+        })?
+        .ok_or(AppError::BackendFailure {
+            operation: "squash",
+        })?;
+        squashed
+            .commit_builder
+            .set_description(&description)
+            .write()
+            .await
+            .map_err(|_| AppError::BackendFailure {
+                operation: "squash",
+            })?;
+        self.finish_transaction(tx, "squash", format!("squash change {}", source_change_id))
+            .await?;
+        Ok(SquashData {
+            source_change_id: source_change_id.to_string(),
+            destination: self
+                .history_change_by_change_id(&destination_change_id)
+                .await?,
+            rebased_descendant_count,
+            conflict_count: self.visible_conflict_count().await?,
+        })
+    }
+
+    pub(crate) async fn abandon(&mut self, revision: &str) -> Result<AbandonData, AppError> {
+        let source = match self.resolve_one(revision).await {
+            Ok(source) => source,
+            Err(AppError::RevisionNotFound { .. }) if self.was_abandoned(revision).await? => {
+                let current = self.current_commit().await?;
+                return Ok(AbandonData {
+                    change_id: revision.to_owned(),
+                    action: AbandonAction::Unchanged,
+                    affected_bookmarks: vec![],
+                    rebased_descendant_count: 0,
+                    conflict_count: 0,
+                    current_change: change_from_commit(&current),
+                });
+            }
+            Err(error) => return Err(error),
+        };
+        self.ensure_rewritable(self.repo.as_ref(), &source).await?;
+        let change_id = source.change_id().clone();
+        let mut affected_bookmarks: Vec<_> = self
+            .repo
+            .view()
+            .local_bookmarks_for_commit(source.id())
+            .map(|(name, _)| name.as_str().to_owned())
+            .collect();
+        affected_bookmarks.sort();
+        let mut rebased_descendant_count = 0_u64;
+        let source_id = source.id().clone();
+        let source_is_working_copy = self
+            .repo
+            .view()
+            .get_wc_commit_id(self.workspace.workspace_name())
+            == Some(&source_id);
+        let replacement_parents = source.parent_ids().to_vec();
+        let replacement_tree =
+            source
+                .parent_tree(self.repo.as_ref())
+                .await
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "abandon",
+                })?;
+        let mut tx = self.start_transaction("abandon");
+        let options = RewriteRefsOptions {
+            delete_abandoned_bookmarks: true,
+        };
+        tx.repo_mut()
+            .transform_descendants_with_options(
+                vec![source_id.clone()],
+                &RevsetExpression::none(),
+                &HashMap::new(),
+                &options,
+                async |rewriter| {
+                    if rewriter.old_commit().id() == &source_id {
+                        rewriter.abandon();
+                    } else {
+                        rewriter.rebase().await?.write().await?;
+                        rebased_descendant_count += 1;
+                    }
+                    Ok(())
+                },
+            )
+            .await
+            .map_err(|_| AppError::BackendFailure {
+                operation: "abandon_transform",
+            })?;
+        if source_is_working_copy {
+            let replacement = tx
+                .repo_mut()
+                .new_commit(replacement_parents, replacement_tree)
+                .write()
+                .await
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "abandon_replacement",
+                })?;
+            tx.repo_mut()
+                .edit(self.workspace.workspace_name().to_owned(), &replacement)
+                .await
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "abandon_edit",
+                })?;
+        }
+        tx.repo_mut()
+            .rebase_descendants()
+            .await
+            .map_err(|_| AppError::BackendFailure {
+                operation: "abandon_rebase",
+            })?;
+        tx.set_attribute(
+            "jj-axi.abandoned-change-id".to_owned(),
+            change_id.to_string(),
+        );
+        self.finish_transaction_inner(
+            tx,
+            "abandon_finish",
+            format!("abandon change {}", change_id),
+            false,
+        )
+        .await?;
+        let current = self.current_commit().await?;
+        Ok(AbandonData {
+            change_id: change_id.to_string(),
+            action: AbandonAction::Abandoned,
+            affected_bookmarks,
+            rebased_descendant_count,
+            conflict_count: self.visible_conflict_count().await?,
+            current_change: change_from_commit(&current),
+        })
+    }
+
+    async fn was_abandoned(&self, change_id: &str) -> Result<bool, AppError> {
+        let operations = op_walk::walk_ancestors(std::slice::from_ref(self.repo.operation()));
+        futures::pin_mut!(operations);
+        while let Some(operation) =
+            operations
+                .try_next()
+                .await
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "read_operations",
+                })?
+        {
+            if operation
+                .metadata()
+                .attributes
+                .get("jj-axi.abandoned-change-id")
+                .is_some_and(|recorded| recorded == change_id)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn visible_descendant_count(&self, commit_id: &CommitId) -> Result<u64, AppError> {
+        let expression = RevsetExpression::commits(vec![commit_id.clone()])
+            .descendants()
+            .intersection(&RevsetExpression::commits(vec![commit_id.clone()]).negated());
+        let revset =
+            expression
+                .evaluate(self.repo.as_ref())
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "read_descendants",
+                })?;
+        let mut stream = revset.stream();
+        let mut count = 0;
+        while stream
+            .try_next()
+            .await
+            .map_err(|_| AppError::BackendFailure {
+                operation: "read_descendants",
+            })?
+            .is_some()
+        {
+            count += 1;
+        }
+        Ok(count)
+    }
+
     pub(crate) async fn reorder(&mut self, sequence: &[String]) -> Result<ReorderData, AppError> {
         let mut commits = Vec::with_capacity(sequence.len());
         for revision in sequence {
@@ -1803,23 +2062,36 @@ impl JjBridge {
 
     async fn finish_transaction(
         &mut self,
+        tx: Transaction,
+        operation: &'static str,
+        operation_description: String,
+    ) -> Result<bool, AppError> {
+        self.finish_transaction_inner(tx, operation, operation_description, true)
+            .await
+    }
+
+    async fn finish_transaction_inner(
+        &mut self,
         mut tx: Transaction,
         operation: &'static str,
         operation_description: String,
+        rebase_descendants: bool,
     ) -> Result<bool, AppError> {
         if !tx.repo().has_changes() {
             return Ok(false);
         }
 
-        let immutable = self.resolve_immutable_expression(tx.base_repo().as_ref())?;
-        tx.repo_mut()
-            .rebase_descendants_with_options(
-                &immutable,
-                &RebaseOptions::default(),
-                |_old_commit, _rebased_commit| {},
-            )
-            .await
-            .map_err(|_| AppError::BackendFailure { operation })?;
+        if rebase_descendants {
+            let immutable = self.resolve_immutable_expression(tx.base_repo().as_ref())?;
+            tx.repo_mut()
+                .rebase_descendants_with_options(
+                    &immutable,
+                    &RebaseOptions::default(),
+                    |_old_commit, _rebased_commit| {},
+                )
+                .await
+                .map_err(|_| AppError::BackendFailure { operation })?;
+        }
 
         let old_wc_id = tx
             .base_repo()

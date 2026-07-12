@@ -990,6 +990,72 @@ impl SetupSkillData {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SquashData {
+    pub source_change_id: String,
+    pub destination: HistoryChange,
+    pub rebased_descendant_count: u64,
+    pub conflict_count: u64,
+}
+
+impl SquashData {
+    pub fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            (
+                "source",
+                ToonValue::Object(vec![
+                    ("change_id", string(&self.source_change_id)),
+                    ("abandoned", ToonValue::Bool(true)),
+                ]),
+            ),
+            ("destination", self.destination.to_toon_value()),
+            (
+                "rebased_descendant_count",
+                ToonValue::UInt(self.rebased_descendant_count),
+            ),
+            ("conflict_count", ToonValue::UInt(self.conflict_count)),
+        ])
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AbandonAction {
+    Abandoned,
+    Unchanged,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AbandonData {
+    pub change_id: String,
+    pub action: AbandonAction,
+    pub affected_bookmarks: Vec<String>,
+    pub rebased_descendant_count: u64,
+    pub conflict_count: u64,
+    pub current_change: Change,
+}
+
+impl AbandonData {
+    pub fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("change_id", string(&self.change_id)),
+            (
+                "action",
+                string(match self.action {
+                    AbandonAction::Abandoned => "abandoned",
+                    AbandonAction::Unchanged => "unchanged",
+                }),
+            ),
+            ("affected_bookmarks", string_array(&self.affected_bookmarks)),
+            (
+                "rebased_descendant_count",
+                ToonValue::UInt(self.rebased_descendant_count),
+            ),
+            ("conflict_count", ToonValue::UInt(self.conflict_count)),
+            ("current_change", self.current_change.to_toon_value()),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResponseKind {
     New,
     Describe,
@@ -1010,6 +1076,8 @@ pub enum ResponseKind {
     BookmarkPush,
     PrStatus,
     SetupSkill,
+    Squash,
+    Abandon,
 }
 
 impl ResponseKind {
@@ -1034,6 +1102,8 @@ impl ResponseKind {
             Self::BookmarkPush => "bookmark_push",
             Self::PrStatus => "pr_status",
             Self::SetupSkill => "setup_skill",
+            Self::Squash => "squash",
+            Self::Abandon => "abandon",
         })
     }
 }
@@ -1059,6 +1129,8 @@ pub enum ResponseData {
     BookmarkPush(BookmarkPushData),
     PrStatus(PrStatusData),
     SetupSkill(SetupSkillData),
+    Squash(SquashData),
+    Abandon(AbandonData),
 }
 
 impl ResponseData {
@@ -1083,6 +1155,8 @@ impl ResponseData {
             Self::BookmarkPush(data) => data.to_toon_value(),
             Self::PrStatus(data) => data.to_toon_value(),
             Self::SetupSkill(data) => data.to_toon_value(),
+            Self::Squash(data) => data.to_toon_value(),
+            Self::Abandon(data) => data.to_toon_value(),
         }
     }
 }

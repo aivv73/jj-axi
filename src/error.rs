@@ -202,6 +202,13 @@ pub enum AppError {
     },
     GithubResponseInvalid,
     GithubResponseTooLarge,
+    SquashMessageRequired {
+        source_change_id: String,
+        destination_change_id: String,
+    },
+    SquashDestinationRequired {
+        source_change_id: String,
+    },
     SkillOutputConflict {
         path: String,
     },
@@ -452,6 +459,18 @@ impl AppError {
             Self::GithubResponseTooLarge => ToonValue::Object(vec![
                 ("code", string("github_response_too_large")),
                 ("retryable", ToonValue::Bool(false)),
+            ]),
+            Self::SquashMessageRequired {
+                source_change_id,
+                destination_change_id,
+            } => ToonValue::Object(vec![
+                ("code", string("squash_message_required")),
+                ("source_change_id", string(source_change_id)),
+                ("destination_change_id", string(destination_change_id)),
+            ]),
+            Self::SquashDestinationRequired { source_change_id } => ToonValue::Object(vec![
+                ("code", string("squash_destination_required")),
+                ("source_change_id", string(source_change_id)),
             ]),
             Self::SkillOutputConflict { path } => ToonValue::Object(vec![
                 ("code", string("skill_output_conflict")),

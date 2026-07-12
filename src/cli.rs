@@ -86,6 +86,14 @@ pub enum CommandInput {
         output: String,
         force: bool,
     },
+    Squash {
+        change: String,
+        destination: Option<String>,
+        message: Option<String>,
+    },
+    Abandon {
+        change: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -181,6 +189,16 @@ enum Command {
     Reorder {
         #[arg(long)]
         sequence: String,
+    },
+    Squash {
+        change: String,
+        #[arg(long = "into")]
+        destination: Option<String>,
+        #[arg(long)]
+        message: Option<String>,
+    },
+    Abandon {
+        change: String,
     },
     Operations {
         #[arg(long, default_value_t = 20, value_parser = parse_limit)]
@@ -306,6 +324,16 @@ where
                 }
             },
             Command::Absorb { dry_run } => CommandInput::Absorb { dry_run },
+            Command::Squash {
+                change,
+                destination,
+                message,
+            } => CommandInput::Squash {
+                change,
+                destination,
+                message,
+            },
+            Command::Abandon { change } => CommandInput::Abandon { change },
             Command::Reorder { sequence } => match parse_reorder_sequence(&sequence) {
                 Ok(sequence) => CommandInput::Reorder { sequence },
                 Err(()) => {
