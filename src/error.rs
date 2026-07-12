@@ -193,6 +193,8 @@ pub enum AppError {
         skipped_paths: Vec<(String, String)>,
     },
     PartitionWorkingCopyUnsafe {
+        total_count: u64,
+        complete: bool,
         workspaces: Vec<String>,
     },
     InvalidHistoryShape {
@@ -472,8 +474,14 @@ impl AppError {
                     ),
                 ),
             ]),
-            Self::PartitionWorkingCopyUnsafe { workspaces } => ToonValue::Object(vec![
+            Self::PartitionWorkingCopyUnsafe {
+                total_count,
+                complete,
+                workspaces,
+            } => ToonValue::Object(vec![
                 ("code", string("partition_working_copy_unsafe")),
+                ("total_count", ToonValue::UInt(*total_count)),
+                ("complete", ToonValue::Bool(*complete)),
                 (
                     "workspaces",
                     ToonValue::Array(workspaces.iter().map(|name| string(name)).collect()),

@@ -99,6 +99,35 @@ jj-axi move --from <change> --to <change> --hunks "src/lib.rs:12-18"
 
 Use `N-0` for a deletion-only boundary. Select multiple hunks with comma-separated entries. Selectors never snap to nearby content: stale or partial ranges fail and return bounded retry candidates. `skipped_paths` identifies content that declarative routing cannot safely address.
 
+Partition one guarded snapshot into several ordered changes when repeated binary splits would force re-inventory of each remainder. Copy the full `snapshot.commit_id` and canonical hunks from `diff --hunks` into a strict JSON manifest:
+
+```json
+{
+  "schema_version": 1,
+  "source_commit_id": "<full commit id>",
+  "parts": [
+    {
+      "description": "refactor parser",
+      "hunks": [{"path": "src/lib.rs", "lines": "12-18"}]
+    },
+    {
+      "description": "test parser",
+      "hunks": [{"path": "tests/lib.rs", "lines": "8-14"}]
+    }
+  ],
+  "remainder": {"destination": "working_copy"}
+}
+```
+
+Keep the manifest outside tracked repository content or pipe it through stdin so writing the plan does not stale its source guard:
+
+```bash
+cat partition.json | jj-axi partition <change> --spec-file - --dry-run
+cat partition.json | jj-axi partition <change> --spec-file -
+```
+
+Choose `remaining_change` to preserve a separate remainder change, `working_copy` to route unfinished content into the invoking descendant working-copy change, or `require_empty` to reject any unassigned or unsupported content. Use `--details` only when the receipt must echo canonical part and remainder hunks. Otherwise rely on the manifest SHA-256, counts, realized identities, conflict status, and bounded affected-state summaries. After success, one `inspect` plus targeted `log` or `show` is normally sufficient; do not repeat binary split inventory loops.
+
 Preview or apply automatic absorption:
 
 ```bash

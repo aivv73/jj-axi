@@ -76,9 +76,10 @@ pub(crate) fn load(path: &str, cwd: &Path) -> Result<LoadedManifest, AppError> {
     let mut deserializer = serde_json::Deserializer::from_str(text);
     let manifest = serde_path_to_error::deserialize::<_, PartitionManifest>(&mut deserializer)
         .map_err(|error| {
+            let message = error.inner().to_string();
             invalid(
-                &json_pointer(&error.path().to_string()),
-                &format!("json: {}", error.inner()),
+                &json_error_pointer(&error.path().to_string(), &message),
+                &format!("json: {message}"),
             )
         })?;
     deserializer
@@ -161,6 +162,23 @@ fn validate(manifest: PartitionManifest, sha256: String) -> Result<LoadedManifes
         sha256,
         specs,
     })
+}
+
+fn json_error_pointer(path: &str, message: &str) -> String {
+    let mut pointer = json_pointer(path);
+    for marker in ["unknown field `", "duplicate field `", "missing field `"] {
+        if let Some(field) = message
+            .split_once(marker)
+            .and_then(|(_, rest)| rest.split_once('`').map(|(field, _)| field))
+        {
+            if pointer != "/" {
+                pointer.push('/');
+            }
+            pointer.push_str(field);
+            break;
+        }
+    }
+    pointer
 }
 
 fn json_pointer(path: &str) -> String {

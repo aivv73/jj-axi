@@ -1,6 +1,7 @@
 mod common;
 
 use common::{assert_error, repository, run_axi, run_axi_with_stdin, run_jj, successful_output};
+use sha2::{Digest as _, Sha256};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -336,6 +337,8 @@ fn partition_routes_current_remainder_to_a_fresh_working_copy_change() {
     );
     assert!(output.contains("destination: working_copy"));
     assert!(output.contains("hunk_count: 1"));
+    assert!(!output.contains("remainder_hunks"));
+    assert!(!output.contains("skipped_paths"));
     assert_eq!(
         changed_lines(&jj_ok(directory.path(), &["diff", "-r", "@-", "--git"])),
         vec!["-two", "+TWO"]
@@ -623,6 +626,8 @@ fn partition_applies_ordered_parts_remaining_change_and_one_step_undo() {
     assert!(output.contains("hunk_count: 1"));
     assert!(output.contains("destination: remaining_change"));
     assert!(output.contains("change_id:"));
+    assert!(output.contains("remainder_hunks[1]:"));
+    assert!(output.contains("lines: \"8\""));
     assert_eq!(change_id(directory.path(), "part one"), source_id);
     assert_eq!(
         jj_ok(
@@ -704,7 +709,8 @@ fn guarded_partition_preview_uses_one_snapshot_without_mutating_state() {
         ],
         "remainder": {"destination": "remaining_change"}
     });
-    fs::write(directory.path().join(".jj/plan.json"), manifest.to_string()).expect("write plan");
+    let manifest_bytes = manifest.to_string();
+    fs::write(directory.path().join(".jj/plan.json"), &manifest_bytes).expect("write plan");
 
     let preview = successful_output(
         directory.path(),
@@ -719,12 +725,18 @@ fn guarded_partition_preview_uses_one_snapshot_without_mutating_state() {
     );
     assert!(preview.starts_with("schema_version: 1\nkind: partition\n"));
     assert!(preview.contains("dry_run: true"));
+    assert!(preview.contains(&format!(
+        "manifest_sha256: {:x}",
+        Sha256::digest(manifest_bytes.as_bytes())
+    )));
     assert!(preview.contains("ordinal: 1"));
     assert!(preview.contains("ordinal: 2"));
     assert!(preview.contains("change_id: null"));
     assert!(preview.contains("lines: \"2\""));
     assert!(preview.contains("lines: \"4\""));
     assert!(preview.contains("destination: remaining_change"));
+    assert!(preview.contains("remainder_hunks: []"));
+    assert!(preview.contains("skipped_paths: []"));
     assert_eq!(snapshot(directory.path(), &["sample.txt"]), before);
 }
 
@@ -813,6 +825,25 @@ fn partition_preview_accepts_stdin_and_rejects_strict_manifest_failures() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("destination: require_empty"));
+
+    let duplicate_error = assert_error_clean(
+        run_axi_with_stdin(
+            directory.path(),
+            &["partition", "@", "--spec-file", "-", "--dry-run"],
+            br#"{"schema_version":1,"schema_version":1}"#,
+        ),
+        "invalid_partition_manifest",
+    );
+    assert!(duplicate_error.contains("pointer: /schema_version"));
+    let unknown_error = assert_error_clean(
+        run_axi_with_stdin(
+            directory.path(),
+            &["partition", "@", "--spec-file", "-", "--dry-run"],
+            br#"{"schema_version":1,"source_commit_id":"x","parts":[],"remainder":{"destination":"remaining_change"},"unknown":true}"#,
+        ),
+        "invalid_partition_manifest",
+    );
+    assert!(unknown_error.contains("pointer: /unknown"));
 
     for invalid in [
         b"{}".as_slice(),

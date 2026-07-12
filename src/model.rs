@@ -517,6 +517,8 @@ pub struct PartitionPreviewData {
     pub remainder_conflicted: Option<bool>,
     pub remainder_hunk_count: u64,
     pub skipped_path_count: u64,
+    pub remainder_hunks: Option<Vec<HunkRef>>,
+    pub skipped_paths: Option<Vec<SkippedPath>>,
     pub rewritten_descendants: PartitionChangeSummary,
     pub affected_bookmarks: PartitionNameSummary,
     pub affected_workspaces: PartitionNameSummary,
@@ -525,7 +527,7 @@ pub struct PartitionPreviewData {
 
 impl PartitionPreviewData {
     pub fn to_toon_value(&self) -> ToonValue {
-        ToonValue::Object(vec![
+        let mut fields = vec![
             ("dry_run", ToonValue::Bool(self.dry_run)),
             ("manifest_sha256", string(&self.manifest_sha256)),
             ("source_change_id", string(&self.source_change_id)),
@@ -561,6 +563,17 @@ impl PartitionPreviewData {
                     ),
                 ]),
             ),
+        ];
+        if let Some(hunks) = &self.remainder_hunks {
+            fields.push(("remainder_hunks", hunk_array(hunks)));
+        }
+        if let Some(paths) = &self.skipped_paths {
+            fields.push((
+                "skipped_paths",
+                ToonValue::Array(paths.iter().map(SkippedPath::to_toon_value).collect()),
+            ));
+        }
+        fields.extend([
             (
                 "rewritten_descendants",
                 self.rewritten_descendants.to_toon_value(),
@@ -574,7 +587,8 @@ impl PartitionPreviewData {
                 self.affected_workspaces.to_toon_value(),
             ),
             ("conflicted", ToonValue::Bool(self.conflicted)),
-        ])
+        ]);
+        ToonValue::Object(fields)
     }
 }
 

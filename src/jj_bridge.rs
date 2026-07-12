@@ -874,6 +874,8 @@ impl JjBridge {
             },
             remainder_hunk_count,
             skipped_path_count: analysis.skipped_paths.len() as u64,
+            remainder_hunks: details.then_some(remainder_hunks),
+            skipped_paths: details.then_some(analysis.skipped_paths),
             rewritten_descendants: partition_change_summary(impact.descendants),
             affected_bookmarks: partition_name_summary(impact.bookmarks),
             affected_workspaces: partition_name_summary(impact.workspaces),
@@ -932,9 +934,15 @@ impl JjBridge {
                     .map(|(name, _)| name.as_str().to_owned())
                     .collect();
                 workspaces.sort();
+                let total_count = workspaces.len() as u64;
+                let complete = workspaces.len() <= 100;
                 workspaces.truncate(100);
                 if !workspaces.is_empty() {
-                    return Err(AppError::PartitionWorkingCopyUnsafe { workspaces });
+                    return Err(AppError::PartitionWorkingCopyUnsafe {
+                        total_count,
+                        complete,
+                        workspaces,
+                    });
                 }
                 Ok(Some(current))
             }
@@ -1170,6 +1178,8 @@ impl JjBridge {
             remainder_conflicted: destination.as_ref().map(Commit::has_conflict),
             remainder_hunk_count,
             skipped_path_count,
+            remainder_hunks: details.then_some(remainder_hunks),
+            skipped_paths: details.then_some(analysis.skipped_paths),
             rewritten_descendants: rewritten_summary,
             affected_bookmarks: partition_name_summary(impact.bookmarks),
             affected_workspaces: partition_name_summary(impact.workspaces),
