@@ -98,8 +98,8 @@ No code or content dependency on any non-compete-licensed or unlicensed project.
 ## 5. Success metrics
 
 - Baseline: raw jj averages ~39.6 commands and 9/10 success on vcbench's split-commit task. jj-axi's `split`/`move` must beat both numbers materially, not marginally.
-- Complete an AXI applicability audit before v0.1, classifying each principle as applicable, adapted, or not applicable with product-specific rationale. Checklist conformance is not a goal where it conflicts with jj-axi’s architecture.
-- First Rust entry in the AXI catalog, submitted via kunchenguid/axi's contributor workflow once M3 is stable.
+- Maintain the [AXI applicability audit](./docs/axi-applicability.md), classifying each principle as applicable, adapted, or not applicable with product-specific rationale. jj-axi does not claim strict AXI conformance.
+- Consider AXI catalog submission only if maintainers accept the documented adaptations; catalog inclusion is not a product-success requirement.
 
 ## 6. Milestones
 
@@ -108,7 +108,7 @@ No code or content dependency on any non-compete-licensed or unlicensed project.
 3. **M3 — History editing.** `split`, `move`, `absorb`, `reorder`. Blocked on open question #1 (ADR required first). This is the milestone that actually targets the vcbench gap.
 4. **M4 — Integrations.** Independent vertical slices: `operations`/`undo`, `bookmark`, `pr status`, and `setup skill`. Session hooks are excluded by ADR 0004.
 5. **M5 — Stack completion.** `squash` and `abandon`. Completes the general stack-editing command map before evaluation.
-6. **M6 — Benchmark.** Run vcbench-style evaluation against raw jj; publish results; submit to AXI catalog if numbers hold up. This is benchmark-specific evaluation work, not product definition.
+6. **M6 — Benchmark.** First make no-argument invocation equivalent to `inspect`, closing the applicability-audit product gap. Then run vcbench-style evaluation against raw jj and publish results. Catalog submission is optional and requires acceptance of documented AXI adaptations. Benchmarking is evaluation work, not product definition.
 
 `validate`/`repair` are explicitly deferred pending open question #3 and are not part of any milestone above.
 
