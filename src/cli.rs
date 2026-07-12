@@ -43,6 +43,12 @@ pub enum CommandInput {
         full: bool,
         hunks: bool,
     },
+    Partition {
+        change: String,
+        spec_file: String,
+        dry_run: bool,
+        details: bool,
+    },
     Split {
         change: String,
         hunks: Vec<HunkSpec>,
@@ -169,6 +175,15 @@ enum Command {
         full: bool,
         #[arg(long)]
         hunks: bool,
+    },
+    Partition {
+        change: String,
+        #[arg(long = "spec-file")]
+        spec_file: String,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long)]
+        details: bool,
     },
     Split {
         change: String,
@@ -310,6 +325,17 @@ where
                 change,
                 full,
                 hunks,
+            },
+            Command::Partition {
+                change,
+                spec_file,
+                dry_run,
+                details,
+            } => CommandInput::Partition {
+                change,
+                spec_file,
+                dry_run,
+                details,
             },
             Command::Split {
                 change,
@@ -516,6 +542,16 @@ fn decode_hunk_component(value: &str) -> Result<String, ()> {
         }
     }
     Ok(decoded)
+}
+
+pub(crate) fn parse_manifest_hunk(path: &str, lines: &str) -> Result<HunkSpec, ()> {
+    if !valid_hunk_path(path) {
+        return Err(());
+    }
+    Ok(HunkSpec {
+        path: path.to_owned(),
+        lines: parse_hunk_range(lines)?,
+    })
 }
 
 fn valid_hunk_path(path: &str) -> bool {

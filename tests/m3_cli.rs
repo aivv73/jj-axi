@@ -1,6 +1,6 @@
 mod common;
 
-use common::{assert_error, repository, run_axi, run_jj, successful_output};
+use common::{assert_error, repository, run_axi, run_axi_with_stdin, run_jj, successful_output};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -102,6 +102,175 @@ fn snapshot(directory: &Path, files: &[&str]) -> Snapshot {
 
 fn assert_error_clean(output: Output, code: &str) -> String {
     assert_error(output, code)
+}
+
+#[test]
+fn guarded_partition_preview_uses_one_snapshot_without_mutating_state() {
+    let directory = repository();
+    write(directory.path(), "sample.txt", b"one\ntwo\nthree\nfour\n");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "mixed"])
+            .status
+            .success()
+    );
+    write(directory.path(), "sample.txt", b"one\nTWO\nthree\nFOUR\n");
+
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    assert!(inventory.contains("snapshot:"));
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .expect("snapshot commit id");
+    let before = snapshot(directory.path(), &["sample.txt"]);
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "source_commit_id": commit_id,
+        "parts": [
+            {"description": "first", "hunks": [{"path": "sample.txt", "lines": "2"}]},
+            {"description": "second", "hunks": [{"path": "sample.txt", "lines": "4"}]}
+        ],
+        "remainder": {"destination": "remaining_change"}
+    });
+    fs::write(directory.path().join(".jj/plan.json"), manifest.to_string()).expect("write plan");
+
+    let preview = successful_output(
+        directory.path(),
+        &[
+            "partition",
+            "@",
+            "--spec-file",
+            ".jj/plan.json",
+            "--dry-run",
+            "--details",
+        ],
+    );
+    assert!(preview.starts_with("schema_version: 1\nkind: partition\n"));
+    assert!(preview.contains("dry_run: true"));
+    assert!(preview.contains("ordinal: 1"));
+    assert!(preview.contains("ordinal: 2"));
+    assert!(preview.contains("change_id: null"));
+    assert!(preview.contains("lines: \"2\""));
+    assert!(preview.contains("lines: \"4\""));
+    assert!(preview.contains("destination: remaining_change"));
+    assert_eq!(snapshot(directory.path(), &["sample.txt"]), before);
+}
+
+#[test]
+fn partition_preview_rejects_duplicate_and_stale_assignments() {
+    let directory = repository();
+    write(directory.path(), "sample.txt", b"one\ntwo\n");
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .expect("snapshot commit id");
+    let duplicate = serde_json::json!({
+        "schema_version": 1,
+        "source_commit_id": commit_id,
+        "parts": [
+            {"description": "one", "hunks": [{"path": "sample.txt", "lines": "1-2"}]},
+            {"description": "two", "hunks": [{"path": "sample.txt", "lines": "1-2"}]}
+        ],
+        "remainder": {"destination": "remaining_change"}
+    });
+    fs::write(
+        directory.path().join(".jj/duplicate.json"),
+        duplicate.to_string(),
+    )
+    .unwrap();
+    let error = assert_error_clean(
+        run_axi(
+            directory.path(),
+            &[
+                "partition",
+                "@",
+                "--spec-file",
+                ".jj/duplicate.json",
+                "--dry-run",
+            ],
+        ),
+        "duplicate_partition_hunk",
+    );
+    assert!(error.contains("first_part_ordinal: 1"));
+    assert!(error.contains("second_part_ordinal: 2"));
+
+    let stale = duplicate
+        .to_string()
+        .replace(commit_id, &"0".repeat(commit_id.len()));
+    fs::write(directory.path().join(".jj/stale.json"), stale).unwrap();
+    assert_error_clean(
+        run_axi(
+            directory.path(),
+            &[
+                "partition",
+                "@",
+                "--spec-file",
+                ".jj/stale.json",
+                "--dry-run",
+            ],
+        ),
+        "stale_partition_source",
+    );
+}
+
+#[test]
+fn partition_preview_accepts_stdin_and_rejects_strict_manifest_failures() {
+    let directory = repository();
+    write(directory.path(), "sample.txt", b"content\n");
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .unwrap();
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "source_commit_id": commit_id,
+        "parts": [{"description": "content", "hunks": [{"path": "sample.txt", "lines": "1"}]}],
+        "remainder": {"destination": "require_empty"}
+    })
+    .to_string();
+    let output = run_axi_with_stdin(
+        directory.path(),
+        &["partition", "@", "--spec-file", "-", "--dry-run"],
+        manifest.as_bytes(),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("destination: require_empty"));
+
+    for invalid in [
+        b"{}".as_slice(),
+        br#"{"schema_version":1,"schema_version":1}"#,
+        br#"{"schema_version":1,"source_commit_id":"x","parts":[],"remainder":{"destination":"remaining_change"},"unknown":true}"#,
+        &[0xff],
+    ] {
+        assert_error_clean(
+            run_axi_with_stdin(
+                directory.path(),
+                &["partition", "@", "--spec-file", "-", "--dry-run"],
+                invalid,
+            ),
+            "invalid_partition_manifest",
+        );
+    }
+
+    let oversized = vec![b' '; 1024 * 1024 + 1];
+    assert_error_clean(
+        run_axi_with_stdin(
+            directory.path(),
+            &["partition", "@", "--spec-file", "-", "--dry-run"],
+            &oversized,
+        ),
+        "partition_manifest_too_large",
+    );
 }
 
 #[test]

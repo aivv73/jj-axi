@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
 use std::fs;
+use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use tempfile::TempDir;
 
@@ -42,6 +43,28 @@ pub fn run_axi(directory: &Path, args: &[&str]) -> Output {
         .env("JJ_EMAIL", USER_EMAIL)
         .output()
         .expect("run jj-axi")
+}
+
+pub fn run_axi_with_stdin(directory: &Path, args: &[&str], input: &[u8]) -> Output {
+    let config = directory.join(".jj").join("jj-axi-test-config.toml");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jj-axi"))
+        .args(args)
+        .current_dir(directory)
+        .env("JJ_CONFIG", config)
+        .env("JJ_USER", USER_NAME)
+        .env("JJ_EMAIL", USER_EMAIL)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run jj-axi with stdin");
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(input)
+        .expect("write child stdin");
+    child.wait_with_output().expect("wait for jj-axi")
 }
 
 pub fn successful_output(directory: &Path, args: &[&str]) -> String {

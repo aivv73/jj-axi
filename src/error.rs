@@ -161,6 +161,31 @@ pub enum AppError {
         reason: String,
         nearest_hunks: Vec<HunkRef>,
     },
+    InvalidPartitionManifest {
+        pointer: String,
+        reason: String,
+    },
+    PartitionManifestTooLarge {
+        limit_bytes: u64,
+    },
+    StalePartitionSource {
+        change_id: String,
+        expected_commit_id: String,
+        current_commit_id: String,
+    },
+    DuplicatePartitionHunk {
+        path: String,
+        lines: String,
+        first_part_ordinal: u64,
+        second_part_ordinal: u64,
+    },
+    InvalidPartitionHunk {
+        part_ordinal: u64,
+        path: String,
+        requested: String,
+        reason: String,
+        nearest_hunks: Vec<HunkRef>,
+    },
     InvalidHistoryShape {
         operation: String,
         reason: String,
@@ -354,6 +379,54 @@ impl AppError {
                 nearest_hunks,
             } => ToonValue::Object(vec![
                 ("code", string("invalid_hunk_selection")),
+                ("path", string(path)),
+                ("requested", string(requested)),
+                ("reason", string(reason)),
+                (
+                    "nearest_hunks",
+                    ToonValue::Array(nearest_hunks.iter().map(HunkRef::to_toon_value).collect()),
+                ),
+            ]),
+            Self::InvalidPartitionManifest { pointer, reason } => ToonValue::Object(vec![
+                ("code", string("invalid_partition_manifest")),
+                ("pointer", string(pointer)),
+                ("reason", string(reason)),
+            ]),
+            Self::PartitionManifestTooLarge { limit_bytes } => ToonValue::Object(vec![
+                ("code", string("partition_manifest_too_large")),
+                ("limit_bytes", ToonValue::UInt(*limit_bytes)),
+            ]),
+            Self::StalePartitionSource {
+                change_id,
+                expected_commit_id,
+                current_commit_id,
+            } => ToonValue::Object(vec![
+                ("code", string("stale_partition_source")),
+                ("change_id", string(change_id)),
+                ("expected_commit_id", string(expected_commit_id)),
+                ("current_commit_id", string(current_commit_id)),
+            ]),
+            Self::DuplicatePartitionHunk {
+                path,
+                lines,
+                first_part_ordinal,
+                second_part_ordinal,
+            } => ToonValue::Object(vec![
+                ("code", string("duplicate_partition_hunk")),
+                ("path", string(path)),
+                ("lines", string(lines)),
+                ("first_part_ordinal", ToonValue::UInt(*first_part_ordinal)),
+                ("second_part_ordinal", ToonValue::UInt(*second_part_ordinal)),
+            ]),
+            Self::InvalidPartitionHunk {
+                part_ordinal,
+                path,
+                requested,
+                reason,
+                nearest_hunks,
+            } => ToonValue::Object(vec![
+                ("code", string("invalid_hunk_selection")),
+                ("part_ordinal", ToonValue::UInt(*part_ordinal)),
                 ("path", string(path)),
                 ("requested", string(requested)),
                 ("reason", string(reason)),

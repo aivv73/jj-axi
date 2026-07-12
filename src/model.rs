@@ -369,6 +369,7 @@ pub struct DiffData {
     pub target: DiffTarget,
     pub diff_stat: DiffStat,
     pub patch: Patch,
+    pub snapshot: Option<DiffSnapshot>,
     pub hunks: Option<Vec<HunkRef>>,
     pub skipped_paths: Option<Vec<SkippedPath>>,
 }
@@ -380,6 +381,9 @@ impl DiffData {
             ("diff_stat", self.diff_stat.to_toon_value()),
             ("patch", self.patch.to_toon_value()),
         ];
+        if let Some(snapshot) = &self.snapshot {
+            fields.push(("snapshot", snapshot.to_toon_value()));
+        }
         if let Some(hunks) = &self.hunks {
             fields.push(("hunks", hunk_array(hunks)));
         }
@@ -390,6 +394,21 @@ impl DiffData {
             ));
         }
         ToonValue::Object(fields)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiffSnapshot {
+    pub change_id: String,
+    pub commit_id: String,
+}
+
+impl DiffSnapshot {
+    pub fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("change_id", string(&self.change_id)),
+            ("commit_id", string(&self.commit_id)),
+        ])
     }
 }
 
@@ -408,6 +427,82 @@ impl DiffTarget {
                 ("change_id", string(change_id)),
             ]),
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PartitionPreviewPart {
+    pub ordinal: u64,
+    pub change_id: Option<String>,
+    pub description: String,
+    pub hunk_count: u64,
+    pub hunks: Option<Vec<HunkRef>>,
+    pub status: Status,
+}
+
+impl PartitionPreviewPart {
+    fn to_toon_value(&self) -> ToonValue {
+        let mut fields = vec![
+            ("ordinal", ToonValue::UInt(self.ordinal)),
+            (
+                "change_id",
+                self.change_id
+                    .as_ref()
+                    .map_or(ToonValue::Null, |id| string(id)),
+            ),
+            ("description", string(&self.description)),
+            ("hunk_count", ToonValue::UInt(self.hunk_count)),
+            ("status", self.status.to_toon_value()),
+        ];
+        if let Some(hunks) = &self.hunks {
+            fields.push(("hunks", hunk_array(hunks)));
+        }
+        ToonValue::Object(fields)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PartitionPreviewData {
+    pub dry_run: bool,
+    pub manifest_sha256: String,
+    pub source_change_id: String,
+    pub source_commit_id: String,
+    pub parts: Vec<PartitionPreviewPart>,
+    pub remainder_destination: String,
+    pub remainder_hunk_count: u64,
+    pub skipped_path_count: u64,
+    pub conflicted: bool,
+}
+
+impl PartitionPreviewData {
+    pub fn to_toon_value(&self) -> ToonValue {
+        ToonValue::Object(vec![
+            ("dry_run", ToonValue::Bool(self.dry_run)),
+            ("manifest_sha256", string(&self.manifest_sha256)),
+            ("source_change_id", string(&self.source_change_id)),
+            ("source_commit_id", string(&self.source_commit_id)),
+            (
+                "parts",
+                ToonValue::Array(
+                    self.parts
+                        .iter()
+                        .map(PartitionPreviewPart::to_toon_value)
+                        .collect(),
+                ),
+            ),
+            (
+                "remainder",
+                ToonValue::Object(vec![
+                    ("destination", string(&self.remainder_destination)),
+                    ("hunk_count", ToonValue::UInt(self.remainder_hunk_count)),
+                    (
+                        "skipped_path_count",
+                        ToonValue::UInt(self.skipped_path_count),
+                    ),
+                ]),
+            ),
+            ("conflicted", ToonValue::Bool(self.conflicted)),
+        ])
     }
 }
 
@@ -1077,6 +1172,7 @@ pub enum ResponseKind {
     Log,
     Show,
     Diff,
+    Partition,
     Split,
     Move,
     Absorb,
@@ -1103,6 +1199,7 @@ impl ResponseKind {
             Self::Log => "log",
             Self::Show => "show",
             Self::Diff => "diff",
+            Self::Partition => "partition",
             Self::Split => "split",
             Self::Move => "move",
             Self::Absorb => "absorb",
@@ -1130,6 +1227,7 @@ pub enum ResponseData {
     Log(LogData),
     Show(ShowData),
     Diff(DiffData),
+    Partition(PartitionPreviewData),
     Split(SplitData),
     Move(MoveData),
     Absorb(AbsorbData),
@@ -1156,6 +1254,7 @@ impl ResponseData {
             Self::Log(data) => data.to_toon_value(),
             Self::Show(data) => data.to_toon_value(),
             Self::Diff(data) => data.to_toon_value(),
+            Self::Partition(data) => data.to_toon_value(),
             Self::Split(data) => data.to_toon_value(),
             Self::Move(data) => data.to_toon_value(),
             Self::Absorb(data) => data.to_toon_value(),

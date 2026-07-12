@@ -66,12 +66,14 @@ use crate::model::{
     AbandonAction, AbandonData, AbsorbData, AbsorbMove, AbsorbSourceAction,
     BookmarkComparisonStatus, BookmarkEntry, BookmarkListData, BookmarkPushData,
     BookmarkRemoteState, BookmarkSetData, BookmarkTargetState, Change, CheckpointData,
-    CurrentChange, DescribeData, DescriptionAction, DiffData, DiffStat, DiffTarget, FinishData,
-    FinishPublication, HistoryChange, HunkRef, InspectData, LocalBookmarkAction, LogData, LogEntry,
-    MoveData, NewData, OperationEntry, OperationKind, OperationsData, Patch, RemoteBookmarkAction,
-    ReorderData, ShowData, SkippedPath, SplitData, SquashData, Status, Truncation, UndoAction,
-    UndoData, UndoSelection, UndoTarget, UnmovedHunk,
+    CurrentChange, DescribeData, DescriptionAction, DiffData, DiffSnapshot, DiffStat, DiffTarget,
+    FinishData, FinishPublication, HistoryChange, HunkRef, InspectData, LocalBookmarkAction,
+    LogData, LogEntry, MoveData, NewData, OperationEntry, OperationKind, OperationsData,
+    PartitionPreviewData, PartitionPreviewPart, Patch, RemoteBookmarkAction, ReorderData, ShowData,
+    SkippedPath, SplitData, SquashData, Status, Truncation, UndoAction, UndoData, UndoSelection,
+    UndoTarget, UnmovedHunk,
 };
+use crate::partition::LoadedManifest;
 
 const DEFAULT_PATCH_LIMIT_BYTES: u64 = 16 * 1024;
 const AXI_UNDO_PREFIX: &str = "jj-axi undo: restore to operation ";
@@ -703,8 +705,103 @@ impl JjBridge {
             target,
             diff_stat: diff.stat,
             patch: diff.patch.ok_or(AppError::Internal)?,
+            snapshot: include_hunks.then(|| DiffSnapshot {
+                change_id: commit.change_id().to_string(),
+                commit_id: commit.id().to_string(),
+            }),
             hunks: analysis.as_ref().map(|analysis| analysis.hunks.clone()),
             skipped_paths: analysis.map(|analysis| analysis.skipped_paths),
+        })
+    }
+
+    pub(crate) async fn preview_partition(
+        &self,
+        revision: &str,
+        loaded: &LoadedManifest,
+        details: bool,
+    ) -> Result<PartitionPreviewData, AppError> {
+        let source = self.resolve_one(revision).await?;
+        self.ensure_rewritable(self.repo.as_ref(), &source).await?;
+        let current_commit_id = source.id().to_string();
+        if loaded.manifest.source_commit_id != current_commit_id {
+            return Err(AppError::StalePartitionSource {
+                change_id: source.change_id().to_string(),
+                expected_commit_id: loaded.manifest.source_commit_id.clone(),
+                current_commit_id,
+            });
+        }
+
+        let mut assigned = BTreeMap::<(String, String), u64>::new();
+        let mut parts = Vec::with_capacity(loaded.manifest.parts.len());
+        for (index, (part, specs)) in loaded.manifest.parts.iter().zip(&loaded.specs).enumerate() {
+            let ordinal = index as u64 + 1;
+            for spec in specs {
+                let key = (spec.path.clone(), format_hunk_range(spec.lines));
+                if let Some(first_part_ordinal) = assigned.insert(key.clone(), ordinal) {
+                    return Err(AppError::DuplicatePartitionHunk {
+                        path: key.0,
+                        lines: key.1,
+                        first_part_ordinal,
+                        second_part_ordinal: ordinal,
+                    });
+                }
+            }
+            let (_, hunks) = self
+                .select_hunks(&source, specs, "partition_preview")
+                .await
+                .map_err(|error| match error {
+                    AppError::InvalidHunkSelection {
+                        path,
+                        requested,
+                        reason,
+                        nearest_hunks,
+                    } => AppError::InvalidPartitionHunk {
+                        part_ordinal: ordinal,
+                        path,
+                        requested,
+                        reason,
+                        nearest_hunks,
+                    },
+                    other => other,
+                })?;
+            parts.push(PartitionPreviewPart {
+                ordinal,
+                change_id: (ordinal == 1).then(|| source.change_id().to_string()),
+                description: normalize_message(&part.description),
+                hunk_count: hunks.len() as u64,
+                hunks: details.then_some(hunks),
+                status: Status {
+                    conflicted: source.has_conflict(),
+                },
+            });
+        }
+
+        let parent_tree =
+            source
+                .parent_tree(self.repo.as_ref())
+                .await
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "partition_preview",
+                })?;
+        let analysis = self
+            .analyze_text_hunks(&parent_tree, &source.tree(), "partition_preview")
+            .await?;
+        let remainder_hunk_count = analysis
+            .hunks
+            .iter()
+            .filter(|hunk| !assigned.contains_key(&(hunk.path.clone(), hunk.lines.clone())))
+            .count() as u64;
+
+        Ok(PartitionPreviewData {
+            dry_run: true,
+            manifest_sha256: loaded.sha256.clone(),
+            source_change_id: source.change_id().to_string(),
+            source_commit_id: source.id().to_string(),
+            parts,
+            remainder_destination: loaded.manifest.remainder.destination.as_str().to_owned(),
+            remainder_hunk_count,
+            skipped_path_count: analysis.skipped_paths.len() as u64,
+            conflicted: source.has_conflict(),
         })
     }
 

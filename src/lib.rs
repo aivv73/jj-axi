@@ -6,6 +6,7 @@ mod error;
 mod github_bridge;
 mod jj_bridge;
 mod model;
+mod partition;
 mod setup;
 mod toon;
 

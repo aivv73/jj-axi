@@ -7,6 +7,7 @@ use crate::error::AppError;
 use crate::github_bridge;
 use crate::jj_bridge::JjBridge;
 use crate::model::{Response, ResponseData, ResponseKind};
+use crate::partition;
 use crate::setup;
 use crate::toon::{ToonValue, render};
 
@@ -64,6 +65,28 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
             kind: ResponseKind::BookmarkList,
             data: ResponseData::BookmarkList(
                 JjBridge::bookmark_list(cwd, *limit, after.as_deref(), name.as_deref()).await?,
+            ),
+        });
+    }
+    if let CommandInput::Partition {
+        change,
+        spec_file,
+        dry_run,
+        details,
+    } = &command
+    {
+        if !dry_run {
+            return Err(AppError::InvalidArgument {
+                argument: "dry_run",
+                constraint: "required_until_partition_apply_is_available",
+            });
+        }
+        let loaded = partition::load(spec_file, cwd)?;
+        let bridge = JjBridge::open(cwd).await?;
+        return Ok(Response {
+            kind: ResponseKind::Partition,
+            data: ResponseData::Partition(
+                bridge.preview_partition(change, &loaded, *details).await?,
             ),
         });
     }
@@ -134,6 +157,7 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
             kind: ResponseKind::Diff,
             data: ResponseData::Diff(bridge.diff(change.as_deref(), full, hunks).await?),
         }),
+        CommandInput::Partition { .. } => unreachable!("partition returns before mutable bridge"),
         CommandInput::Split {
             change,
             hunks,
