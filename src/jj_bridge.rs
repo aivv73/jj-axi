@@ -73,7 +73,10 @@ use crate::model::{
     SkippedPath, SplitData, SquashData, Status, Truncation, UndoAction, UndoData, UndoSelection,
     UndoTarget, UnmovedHunk,
 };
-use crate::partition::LoadedManifest;
+use crate::partition::{
+    LoadedManifest, ManifestHunk, PartitionManifest, PartitionPart, PartitionRemainder,
+    RemainderDestination,
+};
 
 const DEFAULT_PATCH_LIMIT_BYTES: u64 = 16 * 1024;
 const AXI_UNDO_PREFIX: &str = "jj-axi undo: restore to operation ";
@@ -799,9 +802,200 @@ impl JjBridge {
             source_commit_id: source.id().to_string(),
             parts,
             remainder_destination: loaded.manifest.remainder.destination.as_str().to_owned(),
+            remainder_change_id: None,
             remainder_hunk_count,
             skipped_path_count: analysis.skipped_paths.len() as u64,
             conflicted: source.has_conflict(),
+        })
+    }
+
+    pub(crate) async fn apply_partition(
+        &mut self,
+        revision: &str,
+        loaded: &LoadedManifest,
+        details: bool,
+    ) -> Result<PartitionPreviewData, AppError> {
+        self.apply_partition_with_operation(revision, loaded, details, "partition")
+            .await
+    }
+
+    async fn apply_partition_with_operation(
+        &mut self,
+        revision: &str,
+        loaded: &LoadedManifest,
+        details: bool,
+        operation: &'static str,
+    ) -> Result<PartitionPreviewData, AppError> {
+        if loaded.manifest.remainder.destination
+            != crate::partition::RemainderDestination::RemainingChange
+        {
+            return Err(AppError::InvalidArgument {
+                argument: "remainder.destination",
+                constraint: "remaining_change",
+            });
+        }
+        let source = self.resolve_one(revision).await?;
+        self.ensure_rewritable(self.repo.as_ref(), &source).await?;
+        let current_commit_id = source.id().to_string();
+        if loaded.manifest.source_commit_id != current_commit_id {
+            return Err(AppError::StalePartitionSource {
+                change_id: source.change_id().to_string(),
+                expected_commit_id: loaded.manifest.source_commit_id.clone(),
+                current_commit_id,
+            });
+        }
+
+        let mut assigned = BTreeMap::<(String, String), u64>::new();
+        let mut cumulative_specs = Vec::new();
+        let mut selections = Vec::with_capacity(loaded.specs.len());
+        let mut part_hunks: Vec<Vec<HunkRef>> = Vec::with_capacity(loaded.specs.len());
+        for (index, specs) in loaded.specs.iter().enumerate() {
+            let ordinal = index as u64 + 1;
+            for spec in specs {
+                let key = (spec.path.clone(), format_hunk_range(spec.lines));
+                if let Some(first_part_ordinal) = assigned.insert(key.clone(), ordinal) {
+                    return Err(AppError::DuplicatePartitionHunk {
+                        path: key.0,
+                        lines: key.1,
+                        first_part_ordinal,
+                        second_part_ordinal: ordinal,
+                    });
+                }
+            }
+            cumulative_specs.extend(specs.iter().cloned());
+            let (selection, cumulative_hunks) = self
+                .select_hunks(&source, &cumulative_specs, operation)
+                .await
+                .map_err(|error| {
+                    if operation == "split" {
+                        error
+                    } else {
+                        partition_hunk_error(error, ordinal)
+                    }
+                })?;
+            selections.push(selection.selected_tree);
+            part_hunks.push(
+                cumulative_hunks
+                    .into_iter()
+                    .filter(|hunk| {
+                        assigned.get(&(hunk.path.clone(), hunk.lines.clone())) == Some(&ordinal)
+                    })
+                    .collect(),
+            );
+        }
+
+        let parent_tree =
+            source
+                .parent_tree(self.repo.as_ref())
+                .await
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "partition",
+                })?;
+        let analysis = self
+            .analyze_text_hunks(&parent_tree, &source.tree(), "partition")
+            .await?;
+        let remainder_hunk_count = analysis
+            .hunks
+            .iter()
+            .filter(|hunk| !assigned.contains_key(&(hunk.path.clone(), hunk.lines.clone())))
+            .count() as u64;
+        let skipped_path_count = analysis.skipped_paths.len() as u64;
+
+        let mut tx = self.start_transaction(operation);
+        let mut realized = Vec::with_capacity(selections.len());
+        let first = {
+            let mut builder = tx.repo_mut().rewrite_commit(&source).detach();
+            builder
+                .set_tree(selections[0].clone())
+                .set_description(normalize_message(&loaded.manifest.parts[0].description));
+            builder
+                .write(tx.repo_mut())
+                .await
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "partition",
+                })?
+        };
+        realized.push(first.clone());
+        for (index, tree) in selections.iter().enumerate().skip(1) {
+            let mut builder = tx.repo_mut().rewrite_commit(&source).detach();
+            builder
+                .set_parents(vec![realized.last().expect("first part").id().clone()])
+                .set_tree(tree.clone())
+                .set_description(normalize_message(&loaded.manifest.parts[index].description));
+            builder.clear_rewrite_source();
+            builder.generate_new_change_id();
+            realized.push(builder.write(tx.repo_mut()).await.map_err(|_| {
+                AppError::BackendFailure {
+                    operation: "partition",
+                }
+            })?);
+        }
+        let remaining = {
+            let mut builder = tx.repo_mut().rewrite_commit(&source).detach();
+            builder
+                .set_parents(vec![realized.last().expect("partition part").id().clone()])
+                .set_tree(source.tree());
+            builder.clear_rewrite_source();
+            builder.generate_new_change_id();
+            builder
+                .write(tx.repo_mut())
+                .await
+                .map_err(|_| AppError::BackendFailure {
+                    operation: "partition",
+                })?
+        };
+        tx.repo_mut()
+            .transform_descendants(vec![source.id().clone()], async |mut rewriter| {
+                rewriter.replace_parent(first.id(), [remaining.id()]);
+                rewriter.rebase().await?.write().await?;
+                Ok(())
+            })
+            .await
+            .map_err(|_| AppError::BackendFailure { operation })?;
+        for (workspace_name, working_copy_commit) in tx.base_repo().clone().view().wc_commit_ids() {
+            if working_copy_commit == source.id() {
+                tx.repo_mut()
+                    .edit(workspace_name.clone(), &remaining)
+                    .await
+                    .map_err(|_| AppError::BackendFailure { operation })?;
+            }
+        }
+        self.finish_transaction(
+            tx,
+            operation,
+            format!(
+                "{operation} {} into {} parts",
+                source.change_id(),
+                realized.len()
+            ),
+        )
+        .await?;
+
+        let parts = realized
+            .iter()
+            .enumerate()
+            .map(|(index, commit)| PartitionPreviewPart {
+                ordinal: index as u64 + 1,
+                change_id: Some(commit.change_id().to_string()),
+                description: commit.description().to_owned(),
+                hunk_count: part_hunks[index].len() as u64,
+                hunks: details.then(|| part_hunks[index].clone()),
+                status: Status {
+                    conflicted: commit.has_conflict(),
+                },
+            })
+            .collect();
+        Ok(PartitionPreviewData {
+            dry_run: false,
+            manifest_sha256: loaded.sha256.clone(),
+            source_change_id: source.change_id().to_string(),
+            source_commit_id: source.id().to_string(),
+            parts,
+            remainder_destination: "remaining_change".to_owned(),
+            remainder_change_id: Some(remaining.change_id().to_string()),
+            remainder_hunk_count,
+            skipped_path_count,
+            conflicted: realized.iter().any(Commit::has_conflict) || remaining.has_conflict(),
         })
     }
 
@@ -1129,63 +1323,41 @@ impl JjBridge {
         description: &str,
     ) -> Result<SplitData, AppError> {
         let target = self.resolve_one(change).await?;
-        self.ensure_rewritable(self.repo.as_ref(), &target).await?;
         let selected_change_id = target.change_id().clone();
-        let (selection, selected_hunks) = self.select_hunks(&target, hunks, "split").await?;
-
-        let mut tx = self.start_transaction("split");
-        let selected = {
-            let mut builder = tx.repo_mut().rewrite_commit(&selection.commit).detach();
-            builder
-                .set_tree(selection.selected_tree.clone())
-                .set_description(normalize_message(description));
-            builder
-                .write(tx.repo_mut())
-                .await
-                .map_err(|_| AppError::BackendFailure { operation: "split" })?
+        let loaded = LoadedManifest {
+            manifest: PartitionManifest {
+                schema_version: 1,
+                source_commit_id: target.id().to_string(),
+                parts: vec![PartitionPart {
+                    description: description.to_owned(),
+                    hunks: hunks
+                        .iter()
+                        .map(|hunk| ManifestHunk {
+                            path: hunk.path.clone(),
+                            lines: format_hunk_range(hunk.lines),
+                        })
+                        .collect(),
+                }],
+                remainder: PartitionRemainder {
+                    destination: RemainderDestination::RemainingChange,
+                },
+            },
+            sha256: String::new(),
+            specs: vec![hunks.to_vec()],
         };
-        let remaining = {
-            let mut builder = tx.repo_mut().rewrite_commit(&selection.commit).detach();
-            builder
-                .set_parents(vec![selected.id().clone()])
-                .set_tree(selection.commit.tree());
-            builder.clear_rewrite_source();
-            builder.generate_new_change_id();
-            builder
-                .write(tx.repo_mut())
-                .await
-                .map_err(|_| AppError::BackendFailure { operation: "split" })?
-        };
-
-        tx.repo_mut()
-            .transform_descendants(vec![target.id().clone()], async |mut rewriter| {
-                rewriter.replace_parent(selected.id(), [remaining.id()]);
-                rewriter.rebase().await?.write().await?;
-                Ok(())
-            })
-            .await
-            .map_err(|_| AppError::BackendFailure { operation: "split" })?;
-        for (workspace_name, working_copy_commit) in tx.base_repo().clone().view().wc_commit_ids() {
-            if working_copy_commit == target.id() {
-                tx.repo_mut()
-                    .edit(workspace_name.clone(), &remaining)
-                    .await
-                    .map_err(|_| AppError::BackendFailure { operation: "split" })?;
-            }
-        }
-
-        let remaining_change_id = remaining.change_id().clone();
-        self.finish_transaction(tx, "split", format!("split commit {}", target.id().hex()))
+        let result = self
+            .apply_partition_with_operation(change, &loaded, true, "split")
             .await?;
-
+        let remaining_change_id = result
+            .remainder_change_id
+            .as_deref()
+            .ok_or(AppError::Internal)?;
         Ok(SplitData {
             selected: self
                 .history_change_by_change_id(&selected_change_id)
                 .await?,
-            remaining: self
-                .history_change_by_change_id(&remaining_change_id)
-                .await?,
-            hunks: selected_hunks,
+            remaining: history_change_from_commit(&self.resolve_one(remaining_change_id).await?),
+            hunks: result.parts[0].hunks.clone().ok_or(AppError::Internal)?,
         })
     }
 
@@ -3301,6 +3473,24 @@ fn selected_text_by_hunks(
         }
     }
     selected
+}
+
+fn partition_hunk_error(error: AppError, part_ordinal: u64) -> AppError {
+    match error {
+        AppError::InvalidHunkSelection {
+            path,
+            requested,
+            reason,
+            nearest_hunks,
+        } => AppError::InvalidPartitionHunk {
+            part_ordinal,
+            path,
+            requested,
+            reason,
+            nearest_hunks,
+        },
+        other => other,
+    }
 }
 
 fn invalid_hunk_selection(

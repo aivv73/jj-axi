@@ -105,6 +105,126 @@ fn assert_error_clean(output: Output, code: &str) -> String {
 }
 
 #[test]
+fn partition_applies_ordered_parts_remaining_change_and_one_step_undo() {
+    let directory = repository();
+    write(directory.path(), "sample.txt", b"1\n2\n3\n4\n5\n6\n7\n8\n");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "mixed"])
+            .status
+            .success()
+    );
+    write(
+        directory.path(),
+        "sample.txt",
+        b"1\nTWO\n3\nFOUR\n5\nSIX\n7\nEIGHT\n",
+    );
+    assert!(
+        run_jj(directory.path(), &["bookmark", "create", "source-mark"])
+            .status
+            .success()
+    );
+    let source_id = change_id(directory.path(), "mixed");
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "descendant"])
+            .status
+            .success()
+    );
+    write(directory.path(), "child.txt", b"child\n");
+
+    let inventory = successful_output(directory.path(), &["diff", &source_id, "--hunks"]);
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .unwrap();
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "source_commit_id": commit_id,
+        "parts": [
+            {"description": "part one", "hunks": [{"path": "sample.txt", "lines": "2"}]},
+            {"description": "part two", "hunks": [{"path": "sample.txt", "lines": "4"}]},
+            {"description": "part three", "hunks": [{"path": "sample.txt", "lines": "6"}]}
+        ],
+        "remainder": {"destination": "remaining_change"}
+    });
+    fs::write(
+        directory.path().join(".jj/apply.json"),
+        manifest.to_string(),
+    )
+    .unwrap();
+    let before = snapshot(directory.path(), &["sample.txt", "child.txt"]);
+
+    let output = successful_output(
+        directory.path(),
+        &[
+            "partition",
+            &source_id,
+            "--spec-file",
+            ".jj/apply.json",
+            "--details",
+        ],
+    );
+    assert!(output.contains("dry_run: false"));
+    assert!(output.contains("description: \"part one\\n\""));
+    assert!(output.contains("description: \"part two\\n\""));
+    assert!(output.contains("description: \"part three\\n\""));
+    assert!(output.contains("hunk_count: 1"));
+    assert!(output.contains("destination: remaining_change"));
+    assert!(output.contains("change_id:"));
+    assert_eq!(change_id(directory.path(), "part one"), source_id);
+    assert_eq!(
+        jj_ok(
+            directory.path(),
+            &["log", "--no-graph", "-r", "source-mark", "-T", "change_id"]
+        )
+        .trim(),
+        source_id
+    );
+    for (description, expected) in [
+        ("part one", vec!["-2", "+TWO"]),
+        ("part two", vec!["-4", "+FOUR"]),
+        ("part three", vec!["-6", "+SIX"]),
+        ("mixed", vec!["-8", "+EIGHT"]),
+    ] {
+        let patch = jj_ok(
+            directory.path(),
+            &[
+                "diff",
+                "-r",
+                &format!("description(exact:\"{description}\\n\")"),
+                "--git",
+            ],
+        );
+        assert_eq!(changed_lines(&patch), expected, "{description}");
+    }
+    assert!(
+        jj_ok(
+            directory.path(),
+            &[
+                "log",
+                "--no-graph",
+                "-r",
+                "description(exact:\"descendant\\n\")",
+                "-T",
+                "description"
+            ]
+        )
+        .contains("descendant")
+    );
+
+    let undone = successful_output(directory.path(), &["undo"]);
+    assert!(undone.contains("action: restored"));
+    assert!(undone.contains("undone_count: 1"));
+    let after_undo = snapshot(directory.path(), &["sample.txt", "child.txt"]);
+    assert_eq!(after_undo.diff, before.diff);
+    assert_eq!(after_undo.files, before.files);
+}
+
+#[test]
 fn guarded_partition_preview_uses_one_snapshot_without_mutating_state() {
     let directory = repository();
     write(directory.path(), "sample.txt", b"one\ntwo\nthree\nfour\n");
@@ -612,6 +732,7 @@ fn invalid_hunks_are_structured_and_do_not_mutate_history() {
     );
     assert!(stale.contains("reason: range_not_hunk"));
     assert!(stale.contains("nearest_hunks"));
+    assert!(!stale.contains("part_ordinal"));
     assert_eq!(snapshot(directory.path(), &["sample.txt"]), before);
 
     let duplicate = assert_error_clean(

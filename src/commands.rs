@@ -75,19 +75,16 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
         details,
     } = &command
     {
-        if !dry_run {
-            return Err(AppError::InvalidArgument {
-                argument: "dry_run",
-                constraint: "required_until_partition_apply_is_available",
-            });
-        }
         let loaded = partition::load(spec_file, cwd)?;
-        let bridge = JjBridge::open(cwd).await?;
+        let mut bridge = JjBridge::open(cwd).await?;
+        let data = if *dry_run {
+            bridge.preview_partition(change, &loaded, *details).await?
+        } else {
+            bridge.apply_partition(change, &loaded, *details).await?
+        };
         return Ok(Response {
             kind: ResponseKind::Partition,
-            data: ResponseData::Partition(
-                bridge.preview_partition(change, &loaded, *details).await?,
-            ),
+            data: ResponseData::Partition(data),
         });
     }
     let undo_source_ids = if matches!(&command, CommandInput::Undo { .. }) {

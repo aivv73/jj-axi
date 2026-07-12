@@ -71,8 +71,9 @@ pub fn successful_output(directory: &Path, args: &[&str]) -> String {
     let output = run_axi(directory, args);
     assert!(
         output.status.success(),
-        "jj-axi {:?} failed: {}",
+        "jj-axi {:?} failed: stdout={} stderr={}",
         args,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(

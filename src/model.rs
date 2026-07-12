@@ -469,6 +469,7 @@ pub struct PartitionPreviewData {
     pub source_commit_id: String,
     pub parts: Vec<PartitionPreviewPart>,
     pub remainder_destination: String,
+    pub remainder_change_id: Option<String>,
     pub remainder_hunk_count: u64,
     pub skipped_path_count: u64,
     pub conflicted: bool,
@@ -494,6 +495,12 @@ impl PartitionPreviewData {
                 "remainder",
                 ToonValue::Object(vec![
                     ("destination", string(&self.remainder_destination)),
+                    (
+                        "change_id",
+                        self.remainder_change_id
+                            .as_ref()
+                            .map_or(ToonValue::Null, |id| string(id)),
+                    ),
                     ("hunk_count", ToonValue::UInt(self.remainder_hunk_count)),
                     (
                         "skipped_path_count",
