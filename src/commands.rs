@@ -126,9 +126,13 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
             kind: ResponseKind::Show,
             data: ResponseData::Show(bridge.show(&change, full).await?),
         }),
-        CommandInput::Diff { change, full } => Ok(Response {
+        CommandInput::Diff {
+            change,
+            full,
+            hunks,
+        } => Ok(Response {
             kind: ResponseKind::Diff,
-            data: ResponseData::Diff(bridge.diff(change.as_deref(), full).await?),
+            data: ResponseData::Diff(bridge.diff(change.as_deref(), full, hunks).await?),
         }),
         CommandInput::Split {
             change,

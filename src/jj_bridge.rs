@@ -674,6 +674,7 @@ impl JjBridge {
         &self,
         revision: Option<&str>,
         full: bool,
+        include_hunks: bool,
     ) -> Result<DiffData, AppError> {
         let (commit, target) = if let Some(revision) = revision {
             let commit = self.resolve_one(revision).await?;
@@ -685,10 +686,25 @@ impl JjBridge {
             (self.current_commit().await?, DiffTarget::WorkingCopy)
         };
         let diff = self.diff_for_commit(&commit, true, full).await?;
+        let analysis = if include_hunks {
+            let parent_tree = commit.parent_tree(self.repo.as_ref()).await.map_err(|_| {
+                AppError::BackendFailure {
+                    operation: "read_diff_hunks",
+                }
+            })?;
+            Some(
+                self.analyze_text_hunks(&parent_tree, &commit.tree(), "read_diff_hunks")
+                    .await?,
+            )
+        } else {
+            None
+        };
         Ok(DiffData {
             target,
             diff_stat: diff.stat,
             patch: diff.patch.ok_or(AppError::Internal)?,
+            hunks: analysis.as_ref().map(|analysis| analysis.hunks.clone()),
+            skipped_paths: analysis.map(|analysis| analysis.skipped_paths),
         })
     }
 
@@ -1966,6 +1982,17 @@ impl JjBridge {
                 skipped_paths.push(SkippedPath {
                     path: path_string,
                     reason: "unsupported_content".to_owned(),
+                });
+                continue;
+            }
+            if before_metadata
+                .as_ref()
+                .zip(after_metadata.as_ref())
+                .is_some_and(|(before, after)| before.executable != after.executable)
+            {
+                skipped_paths.push(SkippedPath {
+                    path: path_string,
+                    reason: "metadata_change".to_owned(),
                 });
                 continue;
             }

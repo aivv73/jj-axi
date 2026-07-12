@@ -105,6 +105,57 @@ fn assert_error_clean(output: Output, code: &str) -> String {
 }
 
 #[test]
+fn diff_hunk_inventory_provides_canonical_split_selectors() {
+    let directory = repository();
+    write(
+        directory.path(),
+        "sample.txt",
+        b"one\ntwo\nthree\nfour\nfive\n",
+    );
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "mixed"])
+            .status
+            .success()
+    );
+    write(
+        directory.path(),
+        "sample.txt",
+        b"one\nTWO\nthree\nfour\nFIVE\n",
+    );
+    write(directory.path(), "binary.dat", &[0xff, 0x00]);
+
+    let default_diff = successful_output(directory.path(), &["diff"]);
+    assert!(!default_diff.contains("hunks["));
+    assert!(!default_diff.contains("skipped_paths["));
+
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    assert!(inventory.contains("hunks[2]:"));
+    assert!(inventory.contains("path: sample.txt\n      lines: \"2\""));
+    assert!(inventory.contains("path: sample.txt\n      lines: \"5\""));
+    assert!(inventory.contains("skipped_paths[1]:"));
+    assert!(inventory.contains("path: binary.dat"));
+    assert!(inventory.contains("reason: unsupported_content"));
+
+    let split = successful_output(
+        directory.path(),
+        &[
+            "split",
+            "@",
+            "--hunks",
+            "sample.txt:2",
+            "--into",
+            "selected",
+        ],
+    );
+    assert!(split.contains("lines: \"2\""));
+}
+
+#[test]
 fn split_and_move_route_post_image_hunks() {
     let directory = repository();
     write(
@@ -208,6 +259,8 @@ fn split_supports_full_selection_and_deletion_boundaries() {
             .success()
     );
     write(directory.path(), "sample.txt", b"one\nthree\n");
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    assert!(inventory.contains("lines: 2-0"));
     let deletion = successful_output(
         directory.path(),
         &[

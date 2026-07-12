@@ -41,6 +41,7 @@ pub enum CommandInput {
     Diff {
         change: Option<String>,
         full: bool,
+        hunks: bool,
     },
     Split {
         change: String,
@@ -166,6 +167,8 @@ enum Command {
         change: Option<String>,
         #[arg(long)]
         full: bool,
+        #[arg(long)]
+        hunks: bool,
     },
     Split {
         change: String,
@@ -299,7 +302,15 @@ where
                 fields,
             },
             Command::Show { change, full } => CommandInput::Show { change, full },
-            Command::Diff { change, full } => CommandInput::Diff { change, full },
+            Command::Diff {
+                change,
+                full,
+                hunks,
+            } => CommandInput::Diff {
+                change,
+                full,
+                hunks,
+            },
             Command::Split {
                 change,
                 hunks,

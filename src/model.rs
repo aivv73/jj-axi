@@ -369,15 +369,27 @@ pub struct DiffData {
     pub target: DiffTarget,
     pub diff_stat: DiffStat,
     pub patch: Patch,
+    pub hunks: Option<Vec<HunkRef>>,
+    pub skipped_paths: Option<Vec<SkippedPath>>,
 }
 
 impl DiffData {
     pub fn to_toon_value(&self) -> ToonValue {
-        ToonValue::Object(vec![
+        let mut fields = vec![
             ("target", self.target.to_toon_value()),
             ("diff_stat", self.diff_stat.to_toon_value()),
             ("patch", self.patch.to_toon_value()),
-        ])
+        ];
+        if let Some(hunks) = &self.hunks {
+            fields.push(("hunks", hunk_array(hunks)));
+        }
+        if let Some(paths) = &self.skipped_paths {
+            fields.push((
+                "skipped_paths",
+                ToonValue::Array(paths.iter().map(SkippedPath::to_toon_value).collect()),
+            ));
+        }
+        ToonValue::Object(fields)
     }
 }
 
