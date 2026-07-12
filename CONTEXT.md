@@ -51,3 +51,11 @@ _Avoid_: Skill template, generated prompt
 **Raw Jujutsu fallback**:
 A direct `jj` workflow used only when the installed jj-axi interface does not expose the required capability.
 _Avoid_: Shell escape, legacy command
+
+**Squash**:
+Moving all content changes from one change into another and abandoning the emptied source while preserving rewritten descendants.
+_Avoid_: Merge commits, combine branches
+
+**Abandon**:
+Removing one visible change from current history and reparenting its descendants through standard Jujutsu rewrite semantics without reversing external effects.
+_Avoid_: Delete commit, discard repository

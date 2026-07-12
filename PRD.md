@@ -42,8 +42,8 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 | Command | Wraps | Notes |
 |---|---|---|
 | `reorder --sequence "<id1>,<id2>,..."` | `jj rebase` chain | Declarative target order instead of manual rebase steps. |
-| `squash <change> [--into <change>]` | `jj squash` | |
-| `abandon <change>` | `jj abandon` | Idempotent: already-abandoned = no-op, exit 0. |
+| `squash <change> [--into <change>] [--message <message>]` | `jj squash` | Full-content, editor-free squash. Defaults to the sole parent; two non-empty descriptions require an explicit message. Conflicts are successful structured state. See ADR 0005. |
+| `abandon <change>` | `jj abandon` | Idempotent when operation history proves prior abandonment; reports rewritten descendants, local bookmarks, conflicts, and resulting current change. See ADR 0005. |
 | `operations [--limit]` | `jj op log` | Observationally read-only, bounded reverse-topological operation list with parent IDs, classification, and undo eligibility. Does not snapshot the working copy or reconcile divergent heads. |
 | `undo [--to <op-id>]` | `jj op log` + `jj op restore` | Bare undo reverses the latest user-visible repository mutation while preserving newer synchronized working-copy content; explicit restore selects an exact reachable operation. Strictly local, repeated undo walks backward, divergent history requires an explicit target, and foundation operations cannot be removed. See ADR 0002. |
 
@@ -66,7 +66,6 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 
 | Command | Wraps | Notes |
 |---|---|---|
-| `setup hooks [--agent claude-code\|codex\|opencode]` | — | Session integration per AXI principle 7. Idempotent install. |
 | `setup skill --output <path> [--force]` | — | Atomically materializes the embedded canonical `skills/jj-axi/SKILL.md`; idempotent for identical bytes and protective of differing or non-regular destinations. |
 
 ## 2. Open design questions
@@ -84,7 +83,7 @@ jj-axi is written from scratch under MIT/Apache-2.0. It draws on:
 
 - **AXI principles spec** (MIT, kunchenguid/axi) — design methodology, not code; freely applicable.
 - **GitButler's documented AI-agent UX concepts** (docs.gitbutler.com/ai-agents) — ideas and workflow concepts only. No GitButler source code is used or derived from. GitButler's code is under FSL-1.1-MIT, whose Competing Use clause prohibits building a "same or substantially similar functionality" product *from their code*; jj-axi avoids this by not touching their codebase and not reproducing their documentation text verbatim.
-- **gh-axi** (MIT) — reference implementation pattern (session hook + skill dual distribution), reimplemented independently in Rust.
+- **gh-axi** (MIT) — reference implementation pattern for agent discovery and skill distribution; jj-axi adopts skill-led discovery but deliberately does not install session hooks (ADR 0004).
 - **gitsheets-axi** (Apache-2.0) — idempotent-commit convention as a design reference, not a code dependency (different domain: git-as-data-store, not VCS history editing).
 - **onevcat-jj skill** (no license found) — topic coverage was reviewed as product research only. jj-axi's skill text, examples, structure, and frontmatter are independently authored; no prose or other copyrightable content is copied or adapted.
 
@@ -94,12 +93,12 @@ No code or content dependency on any non-compete-licensed or unlicensed project.
 
 - Standalone Rust binary, installable via `cargo install` (later `cargo binstall` for prebuilt binaries).
 - `skills/jj-axi/SKILL.md` is the single canonical skill document and is distributed directly through the standard `skills` CLI (`npx skills add <owner>/jj-axi --skill jj-axi`). The native `setup skill` command embeds and atomically materializes the same bytes without invoking JavaScript tooling.
-- `setup hooks` installs SessionStart hooks for Claude Code, Codex, and OpenCode per AXI principle 7.
+- Agent discovery is skill-led. jj-axi does not mutate agent configuration or install session hooks; see ADR 0004.
 
 ## 5. Success metrics
 
 - Baseline: raw jj averages ~39.6 commands and 9/10 success on vcbench's split-commit task. jj-axi's `split`/`move` must beat both numbers materially, not marginally.
-- Full conformance to all 10 AXI principles, self-audited before v0.1 (checklist against the spec, one row per principle).
+- Complete an AXI applicability audit before v0.1, classifying each principle as applicable, adapted, or not applicable with product-specific rationale. Checklist conformance is not a goal where it conflicts with jj-axi’s architecture.
 - First Rust entry in the AXI catalog, submitted via kunchenguid/axi's contributor workflow once M3 is stable.
 
 ## 6. Milestones
@@ -107,8 +106,9 @@ No code or content dependency on any non-compete-licensed or unlicensed project.
 1. **M1 — Read-only interface.** `inspect`, `log`, `show`, `diff`. Establishes TOON output, schema conventions, truncation contract.
 2. **M2 — Mutations.** `new`, `describe`, `checkpoint`, `finish`. Establishes idempotency and structured-error conventions.
 3. **M3 — History editing.** `split`, `move`, `absorb`, `reorder`. Blocked on open question #1 (ADR required first). This is the milestone that actually targets the vcbench gap.
-4. **M4 — Integrations.** Independent vertical slices: `operations`/`undo`, `bookmark`, `pr status`, `setup skill`, then `setup hooks`.
-5. **M5 — Benchmark.** Run vcbench-style evaluation against raw jj; publish results; submit to AXI catalog if numbers hold up.
+4. **M4 — Integrations.** Independent vertical slices: `operations`/`undo`, `bookmark`, `pr status`, and `setup skill`. Session hooks are excluded by ADR 0004.
+5. **M5 — Stack completion.** `squash` and `abandon`. Completes the general stack-editing command map before evaluation.
+6. **M6 — Benchmark.** Run vcbench-style evaluation against raw jj; publish results; submit to AXI catalog if numbers hold up. This is benchmark-specific evaluation work, not product definition.
 
 `validate`/`repair` are explicitly deferred pending open question #3 and are not part of any milestone above.
 
