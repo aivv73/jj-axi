@@ -20,6 +20,10 @@ _Avoid_: Conflicted oplog, ambiguous history
 A repository or workspace initialization operation whose removal would invalidate the active workspace. It is visible in operation history but is not an undo candidate.
 _Avoid_: Setup mutation, root action
 
+**Working-copy change**:
+The change currently edited by one Jujutsu workspace. A partition may route its remainder into the invoking workspace's existing working-copy change, or create a fresh one when the source is that change.
+_Avoid_: Uncommitted files, dirty tree, unstaged changes
+
 **Local bookmark**:
 A named repository reference expressing the local target an agent may organize or publish.
 _Avoid_: Branch, local branch
@@ -51,6 +55,18 @@ _Avoid_: Skill template, generated prompt
 **Raw Jujutsu fallback**:
 A direct `jj` workflow used only when the installed jj-axi interface does not expose the required capability.
 _Avoid_: Shell escape, legacy command
+
+**Partition**:
+Atomically decomposing one source change's content diff into an ordered sequence of parts and one explicit remainder disposition. The first part preserves the source change identity; binary split is its one-part specialization.
+_Avoid_: Repeated split, batch split, multi-split
+
+**Partition part**:
+One named content selection in a partition, ordered from oldest to newest. The first part preserves the source change identity; later parts receive new identities.
+_Avoid_: Split result, output commit
+
+**Partition remainder**:
+Every source hunk not assigned to a partition part, governed explicitly as a remaining change, working-copy content, or a requirement that the remainder be empty.
+_Avoid_: Leftovers, unmatched changes
 
 **Squash**:
 Moving all content changes from one change into another and abandoning the emptied source while preserving rewritten descendants.

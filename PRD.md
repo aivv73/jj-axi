@@ -34,6 +34,7 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 | Command | Wraps | Notes |
 |---|---|---|
 | `split <change> --hunks "<file>:<lines>,..." --into "<desc>"` | `jj split -i` | Declarative hunk spec instead of interactive editor. **Open question #1 — see §2.** |
+| `partition <change> --spec-file <path\|-> [--dry-run] [--details]` | repeated `jj split -i` and remainder routing | Atomically decomposes one guarded source snapshot into ordered named parts with an explicit remainder disposition. See ADR 0006. |
 | `move --from <change> --to <change> --hunks "..."` | manual multi-step today | Combined operation for routing hunks to an *existing* change (as opposed to creating a new one via `split`). |
 | `absorb [--dry-run]` | `jj absorb` | Structured report of what moved where; `--dry-run` previews without mutating. |
 
@@ -105,7 +106,7 @@ No code or content dependency on any non-compete-licensed or unlicensed project.
 
 1. **M1 — Read-only interface.** `inspect`, `log`, `show`, `diff`. Establishes TOON output, schema conventions, truncation contract.
 2. **M2 — Mutations.** `new`, `describe`, `checkpoint`, `finish`. Establishes idempotency and structured-error conventions.
-3. **M3 — History editing.** `split`, `move`, `absorb`, `reorder`. Blocked on open question #1 (ADR required first). This is the milestone that actually targets the vcbench gap.
+3. **M3 — History editing.** `split`, atomic multi-way `partition`, `move`, `absorb`, `reorder`. Hunk addressing is resolved by ADR 0001; partition identity, remainder, and transaction semantics are resolved by ADR 0006. This milestone addresses general editor-free history construction; benchmark results are supporting evidence, not its product definition.
 4. **M4 — Integrations.** Independent vertical slices: `operations`/`undo`, `bookmark`, `pr status`, and `setup skill`. Session hooks are excluded by ADR 0004.
 5. **M5 — Stack completion.** `squash` and `abandon`. Completes the general stack-editing command map before evaluation.
 6. **M6 — Benchmark.** First make no-argument invocation equivalent to `inspect`, closing the applicability-audit product gap. Then run vcbench-style evaluation against raw jj and publish results. Catalog submission is optional and requires acceptance of documented AXI adaptations. Benchmarking is evaluation work, not product definition.
