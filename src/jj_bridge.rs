@@ -1488,6 +1488,32 @@ impl JjBridge {
             {
                 return Ok(true);
             }
+            let raw_abandon = operation.metadata().description.starts_with("abandon ")
+                || operation
+                    .metadata()
+                    .attributes
+                    .get("args")
+                    .is_some_and(|args| args.starts_with("jj abandon"));
+            if raw_abandon {
+                let referenced_ids: Vec<_> =
+                    operation.all_referenced_commit_ids().cloned().collect();
+                for commit_id in referenced_ids {
+                    if operation.predecessors_for_commit(&commit_id).is_none() {
+                        continue;
+                    }
+                    let commit = self
+                        .repo
+                        .store()
+                        .get_commit_async(&commit_id)
+                        .await
+                        .map_err(|_| AppError::BackendFailure {
+                            operation: "read_operations",
+                        })?;
+                    if commit.change_id().to_string() == change_id {
+                        return Ok(true);
+                    }
+                }
+            }
         }
         Ok(false)
     }
