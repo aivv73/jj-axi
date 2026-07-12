@@ -472,6 +472,7 @@ pub struct PartitionPreviewData {
     pub remainder_change_id: Option<String>,
     pub remainder_hunk_count: u64,
     pub skipped_path_count: u64,
+    pub rewritten_descendant_count: u64,
     pub conflicted: bool,
 }
 
@@ -507,6 +508,10 @@ impl PartitionPreviewData {
                         ToonValue::UInt(self.skipped_path_count),
                     ),
                 ]),
+            ),
+            (
+                "rewritten_descendant_count",
+                ToonValue::UInt(self.rewritten_descendant_count),
             ),
             ("conflicted", ToonValue::Bool(self.conflicted)),
         ])

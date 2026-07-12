@@ -186,6 +186,15 @@ pub enum AppError {
         reason: String,
         nearest_hunks: Vec<HunkRef>,
     },
+    PartitionRemainderNotEmpty {
+        hunk_count: u64,
+        skipped_path_count: u64,
+        hunks: Vec<HunkRef>,
+        skipped_paths: Vec<(String, String)>,
+    },
+    PartitionWorkingCopyUnsafe {
+        workspaces: Vec<String>,
+    },
     InvalidHistoryShape {
         operation: String,
         reason: String,
@@ -433,6 +442,41 @@ impl AppError {
                 (
                     "nearest_hunks",
                     ToonValue::Array(nearest_hunks.iter().map(HunkRef::to_toon_value).collect()),
+                ),
+            ]),
+            Self::PartitionRemainderNotEmpty {
+                hunk_count,
+                skipped_path_count,
+                hunks,
+                skipped_paths,
+            } => ToonValue::Object(vec![
+                ("code", string("partition_remainder_not_empty")),
+                ("hunk_count", ToonValue::UInt(*hunk_count)),
+                ("skipped_path_count", ToonValue::UInt(*skipped_path_count)),
+                (
+                    "hunks",
+                    ToonValue::Array(hunks.iter().map(HunkRef::to_toon_value).collect()),
+                ),
+                (
+                    "skipped_paths",
+                    ToonValue::Array(
+                        skipped_paths
+                            .iter()
+                            .map(|(path, reason)| {
+                                ToonValue::Object(vec![
+                                    ("path", string(path)),
+                                    ("reason", string(reason)),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ]),
+            Self::PartitionWorkingCopyUnsafe { workspaces } => ToonValue::Object(vec![
+                ("code", string("partition_working_copy_unsafe")),
+                (
+                    "workspaces",
+                    ToonValue::Array(workspaces.iter().map(|name| string(name)).collect()),
                 ),
             ]),
             Self::InvalidHistoryShape {

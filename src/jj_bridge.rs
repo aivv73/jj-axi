@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::OsString;
 use std::io;
@@ -789,11 +790,21 @@ impl JjBridge {
         let analysis = self
             .analyze_text_hunks(&parent_tree, &source.tree(), "partition_preview")
             .await?;
-        let remainder_hunk_count = analysis
+        let remainder_hunks: Vec<_> = analysis
             .hunks
             .iter()
             .filter(|hunk| !assigned.contains_key(&(hunk.path.clone(), hunk.lines.clone())))
-            .count() as u64;
+            .cloned()
+            .collect();
+        let current = self
+            .validate_partition_remainder(
+                &source,
+                &loaded.manifest.remainder.destination,
+                &remainder_hunks,
+                &analysis.skipped_paths,
+            )
+            .await?;
+        let remainder_hunk_count = remainder_hunks.len() as u64;
 
         Ok(PartitionPreviewData {
             dry_run: true,
@@ -805,8 +816,70 @@ impl JjBridge {
             remainder_change_id: None,
             remainder_hunk_count,
             skipped_path_count: analysis.skipped_paths.len() as u64,
-            conflicted: source.has_conflict(),
+            rewritten_descendant_count: 0,
+            conflicted: source.has_conflict() || current.as_ref().is_some_and(Commit::has_conflict),
         })
+    }
+
+    async fn validate_partition_remainder(
+        &self,
+        source: &Commit,
+        destination: &RemainderDestination,
+        remainder_hunks: &[HunkRef],
+        skipped_paths: &[SkippedPath],
+    ) -> Result<Option<Commit>, AppError> {
+        match destination {
+            RemainderDestination::RequireEmpty
+                if !remainder_hunks.is_empty() || !skipped_paths.is_empty() =>
+            {
+                Err(AppError::PartitionRemainderNotEmpty {
+                    hunk_count: remainder_hunks.len() as u64,
+                    skipped_path_count: skipped_paths.len() as u64,
+                    hunks: remainder_hunks.iter().take(3).cloned().collect(),
+                    skipped_paths: skipped_paths
+                        .iter()
+                        .take(3)
+                        .map(|path| (path.path.clone(), path.reason.clone()))
+                        .collect(),
+                })
+            }
+            RemainderDestination::WorkingCopy => {
+                let current = self.current_commit().await?;
+                if source.id() != current.id()
+                    && !self
+                        .repo
+                        .index()
+                        .is_ancestor(source.id(), current.id())
+                        .unwrap_or(false)
+                {
+                    return Err(AppError::InvalidHistoryShape {
+                        operation: "partition".to_owned(),
+                        reason: "source_not_ancestor_of_working_copy".to_owned(),
+                        change_ids: vec![
+                            source.change_id().to_string(),
+                            current.change_id().to_string(),
+                        ],
+                    });
+                }
+                let mut workspaces: Vec<_> = self
+                    .repo
+                    .view()
+                    .wc_commit_ids()
+                    .iter()
+                    .filter(|(name, commit_id)| {
+                        *commit_id == source.id() && *name != self.workspace.workspace_name()
+                    })
+                    .map(|(name, _)| name.as_str().to_owned())
+                    .collect();
+                workspaces.sort();
+                workspaces.truncate(100);
+                if !workspaces.is_empty() {
+                    return Err(AppError::PartitionWorkingCopyUnsafe { workspaces });
+                }
+                Ok(Some(current))
+            }
+            _ => Ok(None),
+        }
     }
 
     pub(crate) async fn apply_partition(
@@ -826,14 +899,6 @@ impl JjBridge {
         details: bool,
         operation: &'static str,
     ) -> Result<PartitionPreviewData, AppError> {
-        if loaded.manifest.remainder.destination
-            != crate::partition::RemainderDestination::RemainingChange
-        {
-            return Err(AppError::InvalidArgument {
-                argument: "remainder.destination",
-                constraint: "remaining_change",
-            });
-        }
         let source = self.resolve_one(revision).await?;
         self.ensure_rewritable(self.repo.as_ref(), &source).await?;
         let current_commit_id = source.id().to_string();
@@ -884,21 +949,28 @@ impl JjBridge {
             );
         }
 
-        let parent_tree =
-            source
-                .parent_tree(self.repo.as_ref())
-                .await
-                .map_err(|_| AppError::BackendFailure {
-                    operation: "partition",
-                })?;
+        let parent_tree = source
+            .parent_tree(self.repo.as_ref())
+            .await
+            .map_err(|_| AppError::BackendFailure { operation })?;
         let analysis = self
-            .analyze_text_hunks(&parent_tree, &source.tree(), "partition")
+            .analyze_text_hunks(&parent_tree, &source.tree(), operation)
             .await?;
-        let remainder_hunk_count = analysis
+        let remainder_hunks: Vec<_> = analysis
             .hunks
             .iter()
             .filter(|hunk| !assigned.contains_key(&(hunk.path.clone(), hunk.lines.clone())))
-            .count() as u64;
+            .cloned()
+            .collect();
+        let current = self
+            .validate_partition_remainder(
+                &source,
+                &loaded.manifest.remainder.destination,
+                &remainder_hunks,
+                &analysis.skipped_paths,
+            )
+            .await?;
+        let remainder_hunk_count = remainder_hunks.len() as u64;
         let skipped_path_count = analysis.skipped_paths.len() as u64;
 
         let mut tx = self.start_transaction(operation);
@@ -911,9 +983,7 @@ impl JjBridge {
             builder
                 .write(tx.repo_mut())
                 .await
-                .map_err(|_| AppError::BackendFailure {
-                    operation: "partition",
-                })?
+                .map_err(|_| AppError::BackendFailure { operation })?
         };
         realized.push(first.clone());
         for (index, tree) in selections.iter().enumerate().skip(1) {
@@ -924,30 +994,60 @@ impl JjBridge {
                 .set_description(normalize_message(&loaded.manifest.parts[index].description));
             builder.clear_rewrite_source();
             builder.generate_new_change_id();
-            realized.push(builder.write(tx.repo_mut()).await.map_err(|_| {
-                AppError::BackendFailure {
-                    operation: "partition",
-                }
-            })?);
+            realized.push(
+                builder
+                    .write(tx.repo_mut())
+                    .await
+                    .map_err(|_| AppError::BackendFailure { operation })?,
+            );
         }
-        let remaining = {
+        let create_remainder = loaded.manifest.remainder.destination
+            == RemainderDestination::RemainingChange
+            || (loaded.manifest.remainder.destination == RemainderDestination::WorkingCopy
+                && current
+                    .as_ref()
+                    .is_some_and(|commit| commit.id() == source.id()));
+        let remaining = if create_remainder {
             let mut builder = tx.repo_mut().rewrite_commit(&source).detach();
             builder
                 .set_parents(vec![realized.last().expect("partition part").id().clone()])
                 .set_tree(source.tree());
             builder.clear_rewrite_source();
             builder.generate_new_change_id();
-            builder
-                .write(tx.repo_mut())
-                .await
-                .map_err(|_| AppError::BackendFailure {
-                    operation: "partition",
-                })?
+            Some(
+                builder
+                    .write(tx.repo_mut())
+                    .await
+                    .map_err(|_| AppError::BackendFailure { operation })?,
+            )
+        } else {
+            None
         };
+        let terminal = remaining
+            .as_ref()
+            .unwrap_or_else(|| realized.last().expect("partition part"));
+        let working_destination = current
+            .as_ref()
+            .filter(|commit| commit.id() != source.id())
+            .cloned();
+        let rewritten_descendant_count = Cell::new(0_u64);
         tx.repo_mut()
             .transform_descendants(vec![source.id().clone()], async |mut rewriter| {
-                rewriter.replace_parent(first.id(), [remaining.id()]);
-                rewriter.rebase().await?.write().await?;
+                rewritten_descendant_count.set(rewritten_descendant_count.get() + 1);
+                let is_working_destination = working_destination
+                    .as_ref()
+                    .is_some_and(|commit| commit.id() == rewriter.old_commit().id());
+                rewriter.replace_parent(first.id(), [terminal.id()]);
+                let mut builder = rewriter.rebase().await?;
+                if is_working_destination {
+                    builder = builder.set_tree(
+                        working_destination
+                            .as_ref()
+                            .expect("working destination")
+                            .tree(),
+                    );
+                }
+                builder.write().await?;
                 Ok(())
             })
             .await
@@ -955,7 +1055,7 @@ impl JjBridge {
         for (workspace_name, working_copy_commit) in tx.base_repo().clone().view().wc_commit_ids() {
             if working_copy_commit == source.id() {
                 tx.repo_mut()
-                    .edit(workspace_name.clone(), &remaining)
+                    .edit(workspace_name.clone(), terminal)
                     .await
                     .map_err(|_| AppError::BackendFailure { operation })?;
             }
@@ -971,6 +1071,11 @@ impl JjBridge {
         )
         .await?;
 
+        let destination = match loaded.manifest.remainder.destination {
+            RemainderDestination::RemainingChange => remaining.clone(),
+            RemainderDestination::WorkingCopy => Some(self.current_commit().await?),
+            RemainderDestination::RequireEmpty => None,
+        };
         let parts = realized
             .iter()
             .enumerate()
@@ -991,11 +1096,15 @@ impl JjBridge {
             source_change_id: source.change_id().to_string(),
             source_commit_id: source.id().to_string(),
             parts,
-            remainder_destination: "remaining_change".to_owned(),
-            remainder_change_id: Some(remaining.change_id().to_string()),
+            remainder_destination: loaded.manifest.remainder.destination.as_str().to_owned(),
+            remainder_change_id: destination
+                .as_ref()
+                .map(|commit| commit.change_id().to_string()),
             remainder_hunk_count,
             skipped_path_count,
-            conflicted: realized.iter().any(Commit::has_conflict) || remaining.has_conflict(),
+            rewritten_descendant_count: rewritten_descendant_count.get(),
+            conflicted: realized.iter().any(Commit::has_conflict)
+                || destination.as_ref().is_some_and(Commit::has_conflict),
         })
     }
 

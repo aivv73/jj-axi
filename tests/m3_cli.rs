@@ -105,6 +105,258 @@ fn assert_error_clean(output: Output, code: &str) -> String {
 }
 
 #[test]
+fn partition_routes_current_remainder_to_a_fresh_working_copy_change() {
+    let directory = repository();
+    write(directory.path(), "sample.txt", b"one\ntwo\nthree\nfour\n");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "mixed"])
+            .status
+            .success()
+    );
+    write(directory.path(), "sample.txt", b"one\nTWO\nthree\nFOUR\n");
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .unwrap();
+    let manifest = serde_json::json!({
+        "schema_version": 1, "source_commit_id": commit_id,
+        "parts": [{"description": "selected", "hunks": [{"path": "sample.txt", "lines": "2"}]}],
+        "remainder": {"destination": "working_copy"}
+    });
+    fs::write(
+        directory.path().join(".jj/working.json"),
+        manifest.to_string(),
+    )
+    .unwrap();
+    let output = successful_output(
+        directory.path(),
+        &["partition", "@", "--spec-file", ".jj/working.json"],
+    );
+    assert!(output.contains("destination: working_copy"));
+    assert!(output.contains("hunk_count: 1"));
+    assert_eq!(
+        changed_lines(&jj_ok(directory.path(), &["diff", "-r", "@-", "--git"])),
+        vec!["-two", "+TWO"]
+    );
+    assert_eq!(
+        changed_lines(&jj_ok(directory.path(), &["diff", "-r", "@", "--git"])),
+        vec!["-four", "+FOUR"]
+    );
+}
+
+#[test]
+fn partition_routes_ancestor_remainder_into_existing_working_copy_content() {
+    let directory = repository();
+    write(directory.path(), "sample.txt", b"one\ntwo\nthree\nfour\n");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "mixed"])
+            .status
+            .success()
+    );
+    write(directory.path(), "sample.txt", b"one\nTWO\nthree\nFOUR\n");
+    let source = change_id(directory.path(), "mixed");
+    let inventory = successful_output(directory.path(), &["diff", &source, "--hunks"]);
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .unwrap();
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "working"])
+            .status
+            .success()
+    );
+    write(directory.path(), "child.txt", b"child\n");
+    let manifest = serde_json::json!({
+        "schema_version": 1, "source_commit_id": commit_id,
+        "parts": [{"description": "selected", "hunks": [{"path": "sample.txt", "lines": "2"}]}],
+        "remainder": {"destination": "working_copy"}
+    });
+    fs::write(
+        directory.path().join(".jj/ancestor-working.json"),
+        manifest.to_string(),
+    )
+    .unwrap();
+    let output = successful_output(
+        directory.path(),
+        &[
+            "partition",
+            &source,
+            "--spec-file",
+            ".jj/ancestor-working.json",
+        ],
+    );
+    assert!(output.contains("rewritten_descendant_count: 1"));
+    let working_patch = jj_ok(directory.path(), &["diff", "-r", "@", "--git"]);
+    assert_eq!(
+        changed_lines(&working_patch),
+        vec!["+child", "-four", "+FOUR"]
+    );
+    assert_eq!(
+        changed_lines(&jj_ok(directory.path(), &["diff", "-r", "@-", "--git"])),
+        vec!["-two", "+TWO"]
+    );
+}
+
+#[test]
+fn partition_require_empty_applies_exhaustively_and_rejects_remainders() {
+    let directory = repository();
+    write(directory.path(), "sample.txt", b"one\ntwo\nthree\nfour\n");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "mixed"])
+            .status
+            .success()
+    );
+    write(directory.path(), "sample.txt", b"one\nTWO\nthree\nFOUR\n");
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .unwrap();
+    let incomplete = serde_json::json!({
+        "schema_version": 1, "source_commit_id": commit_id,
+        "parts": [{"description": "one", "hunks": [{"path": "sample.txt", "lines": "2"}]}],
+        "remainder": {"destination": "require_empty"}
+    });
+    fs::write(
+        directory.path().join(".jj/incomplete.json"),
+        incomplete.to_string(),
+    )
+    .unwrap();
+    let before = snapshot(directory.path(), &["sample.txt"]);
+    let error = assert_error_clean(
+        run_axi(
+            directory.path(),
+            &["partition", "@", "--spec-file", ".jj/incomplete.json"],
+        ),
+        "partition_remainder_not_empty",
+    );
+    assert!(error.contains("hunk_count: 1"));
+    assert!(error.contains("lines: \"4\""));
+    assert_eq!(snapshot(directory.path(), &["sample.txt"]), before);
+
+    let complete = serde_json::json!({
+        "schema_version": 1, "source_commit_id": commit_id,
+        "parts": [
+            {"description": "one", "hunks": [{"path": "sample.txt", "lines": "2"}]},
+            {"description": "two", "hunks": [{"path": "sample.txt", "lines": "4"}]}
+        ],
+        "remainder": {"destination": "require_empty"}
+    });
+    fs::write(
+        directory.path().join(".jj/complete.json"),
+        complete.to_string(),
+    )
+    .unwrap();
+    let output = successful_output(
+        directory.path(),
+        &["partition", "@", "--spec-file", ".jj/complete.json"],
+    );
+    assert!(output.contains("destination: require_empty"));
+    assert!(output.contains("change_id: null"));
+    assert!(
+        jj_ok(
+            directory.path(),
+            &["log", "--no-graph", "-r", "@", "-T", "description"]
+        )
+        .contains("two")
+    );
+}
+
+#[test]
+fn partition_require_empty_rejects_skipped_content_in_preview_and_apply() {
+    let directory = repository();
+    write(directory.path(), "text.txt", b"text\n");
+    write(directory.path(), "binary.dat", &[0xff, 0x00]);
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .unwrap();
+    let manifest = serde_json::json!({
+        "schema_version": 1, "source_commit_id": commit_id,
+        "parts": [{"description": "text", "hunks": [{"path": "text.txt", "lines": "1"}]}],
+        "remainder": {"destination": "require_empty"}
+    });
+    fs::write(
+        directory.path().join(".jj/skipped.json"),
+        manifest.to_string(),
+    )
+    .unwrap();
+    for extra in [vec!["--dry-run"], Vec::new()] {
+        let mut args = vec!["partition", "@", "--spec-file", ".jj/skipped.json"];
+        args.extend(extra);
+        let error = assert_error_clean(
+            run_axi(directory.path(), &args),
+            "partition_remainder_not_empty",
+        );
+        assert!(error.contains("skipped_path_count: 1"));
+        assert!(error.contains("path: binary.dat"));
+    }
+}
+
+#[test]
+fn partition_working_copy_rejects_an_unrelated_source() {
+    let directory = repository();
+    write(directory.path(), "base.txt", b"base\n");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "root()", "-m", "source"])
+            .status
+            .success()
+    );
+    write(directory.path(), "source.txt", b"source\n");
+    let source = change_id(directory.path(), "source");
+    let inventory = successful_output(directory.path(), &["diff", &source, "--hunks"]);
+    let commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .unwrap();
+    assert!(
+        run_jj(directory.path(), &["new", "root()", "-m", "working"])
+            .status
+            .success()
+    );
+    write(directory.path(), "working.txt", b"working\n");
+    let manifest = serde_json::json!({
+        "schema_version": 1, "source_commit_id": commit_id,
+        "parts": [{"description": "selected", "hunks": [{"path": "source.txt", "lines": "1"}]}],
+        "remainder": {"destination": "working_copy"}
+    });
+    fs::write(
+        directory.path().join(".jj/unrelated.json"),
+        manifest.to_string(),
+    )
+    .unwrap();
+    assert_error_clean(
+        run_axi(
+            directory.path(),
+            &["partition", &source, "--spec-file", ".jj/unrelated.json"],
+        ),
+        "invalid_history_shape",
+    );
+}
+
+#[test]
 fn partition_applies_ordered_parts_remaining_change_and_one_step_undo() {
     let directory = repository();
     write(directory.path(), "sample.txt", b"1\n2\n3\n4\n5\n6\n7\n8\n");
