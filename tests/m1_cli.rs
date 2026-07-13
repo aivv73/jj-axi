@@ -16,30 +16,29 @@ fn version_reports_the_compiled_package_version_without_a_repository() {
 }
 
 #[test]
-fn no_arguments_prints_the_short_bootstrap_without_a_repository() {
+fn no_arguments_prints_the_skill_body_without_frontmatter() {
     let directory = tempfile::tempdir().expect("create temporary directory");
     let output = run_axi(directory.path(), &[]);
+    let skill = include_bytes!("../skills/jj-axi/SKILL.md");
+    let separator = b"\n---\n\n";
+    let body_start = skill
+        .windows(separator.len())
+        .position(|window| window == separator)
+        .expect("skill has closing frontmatter delimiter")
+        + separator.len();
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
-    assert_eq!(
-        output.stdout,
-        include_bytes!("../skills/jj-axi/BOOTSTRAP.md")
-    );
+    assert_eq!(output.stdout, skill[body_start..]);
+    assert!(!output.stdout.starts_with(b"---"));
     assert!(
         String::from_utf8(output.stdout)
             .unwrap()
-            .contains("jj-axi skill")
+            .contains("jj-axi <command> --help")
     );
     assert!(
-        include_bytes!("../skills/jj-axi/BOOTSTRAP.md").len() * 4
-            < include_bytes!("../skills/jj-axi/SKILL.md").len() * 3,
-        "bootstrap must stay substantially smaller than the operational skill"
-    );
-    assert!(
-        include_bytes!("../skills/jj-axi/SKILL.md").len() * 3
-            < include_bytes!("../docs/agent-reference.md").len() * 2,
-        "operational skill must stay substantially smaller than the agent reference"
+        skill.len() * 3 < include_bytes!("../docs/agent-reference.md").len() * 2,
+        "routing skill must stay substantially smaller than the agent reference"
     );
 }
 

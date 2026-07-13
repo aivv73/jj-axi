@@ -142,8 +142,8 @@ Routine creation and description can stay on raw `jj`; compatibility and composi
 
 ### Agent integration
 
-- no arguments — print the short bootstrap guide;
-- `skill` — print the compact routing skill to stdout;
+- no arguments — print the routing skill body without YAML frontmatter;
+- `skill` — print the complete installable routing skill;
 - `skill --full` — print the detailed agent reference;
 - `skill --output <path> [--force]` — install the routing skill atomically with conflict protection;
 - `setup skill` — compatibility alias for protected installation.
@@ -171,12 +171,12 @@ cargo build --release --locked
 
 ## Agent instructions
 
-jj-axi separates discovery, routine operation, and detailed reference material so agents only load the context they need:
+jj-axi uses one routing text for automatic skill discovery and manual bootstrap, avoiding two instruction files that can drift:
 
 | Invocation | Purpose |
 | --- | --- |
-| `jj-axi` | Short routing guide: when to use raw `jj` or jj-axi |
-| `jj-axi skill` | Compact command router and cross-command safety rules |
+| `jj-axi` | Print the routing body without YAML frontmatter |
+| `jj-axi skill` | Print the same routing body with installable skill frontmatter |
 | `jj-axi skill --full` | Detailed reference for secondary commands and edge cases |
 | `jj-axi <command> --help` | Version-matched workflow, examples, and safety contract |
 

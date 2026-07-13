@@ -24,7 +24,7 @@ pub(crate) async fn run(parsed: ParsedCli, cwd: &Path) -> ExitCode {
             argument,
             constraint,
         }),
-        ParsedCli::Command(CommandInput::Bootstrap) => emit_bytes(setup::BOOTSTRAP_BYTES),
+        ParsedCli::Command(CommandInput::Bootstrap) => emit_bytes(setup::skill_body()),
         ParsedCli::Command(CommandInput::Skill {
             full: false,
             output: None,

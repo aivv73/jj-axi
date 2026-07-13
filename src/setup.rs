@@ -7,9 +7,18 @@ use sha2::{Digest as _, Sha256};
 use crate::error::AppError;
 use crate::model::{SetupSkillAction, SetupSkillData};
 
-pub(crate) const BOOTSTRAP_BYTES: &[u8] = include_bytes!("../skills/jj-axi/BOOTSTRAP.md");
 pub(crate) const SKILL_BYTES: &[u8] = include_bytes!("../skills/jj-axi/SKILL.md");
 pub(crate) const AGENT_REFERENCE_BYTES: &[u8] = include_bytes!("../docs/agent-reference.md");
+
+pub(crate) fn skill_body() -> &'static [u8] {
+    const FRONTMATTER_END: &[u8] = b"\n---\n\n";
+    SKILL_BYTES
+        .windows(FRONTMATTER_END.len())
+        .position(|window| window == FRONTMATTER_END)
+        .map_or(SKILL_BYTES, |position| {
+            &SKILL_BYTES[position + FRONTMATTER_END.len()..]
+        })
+}
 
 pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, AppError> {
     let requested = Path::new(output);

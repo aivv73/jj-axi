@@ -49,8 +49,8 @@ A stable machine-readable condition that currently prevents merge readiness.
 _Avoid_: PR problem, blocker message
 
 **Bootstrap guide**:
-The short instruction artifact that routes an agent between routine Jujutsu work and non-trivial history editing without teaching the full jj-axi interface.
-_Avoid_: Home view, mini skill
+The body of the canonical skill document, printed without YAML frontmatter by bare invocation to route an agent between routine Jujutsu work and non-trivial history editing.
+_Avoid_: Home view, separate bootstrap file, mini skill
 
 **Canonical skill document**:
 The compact, versioned, repository-independent instruction artifact that routes an agent to the correct jj-axi command and preserves only cross-command safety rules. Exact execution contracts belong to installed command help.

@@ -69,7 +69,7 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 
 | Command | Wraps | Notes |
 |---|---|---|
-| `jj-axi` | — | Prints the short bootstrap guide that routes routine work to raw `jj` and non-trivial history editing to jj-axi. Does not open a repository. |
+| `jj-axi` | — | Prints the body of the canonical routing skill without YAML frontmatter. Does not open a repository. |
 | `skill [--full \| --output <path> [--force]]` | — | By default, prints the compact command router and global safety rules. `--full` prints the detailed agent reference. `--output` atomically materializes the routing skill; it is idempotent for identical bytes and protective of differing or non-regular destinations. |
 | `setup skill --output <path> [--force]` | — | Compatibility alias for protected skill installation. |
 
@@ -79,7 +79,7 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 2. **jj-lib API stability.** jj-lib is not a stable, versioned public API in the way the `jj` CLI's UX is. Need to pin target jj version(s) and decide how much abstraction insulates jj-axi from upstream breakage.
 3. **Scope of `validate`.** What invariants does this actually check that `inspect` and `undo` don't already surface? If the answer is "nothing new," cut the command rather than ship a placeholder.
 4. **Resolved `finish` composite boundary.** `--message` is optional; when omitted, the stored description must be non-empty. Without `--bookmark`, finish applies the optional message and returns readiness-only success without private finished metadata. With `--bookmark`, finish creates or fast-forwards only that exact name and pushes only that name. The remote is `git.push`, otherwise the sole configured remote, otherwise `origin`; no name or remote is inferred from tracking. Description and bookmark updates are one local operation retained when push fails, which returns a structured partial result.
-5. **Resolved progressive disclosure.** The compact routing artifact lives at `skills/jj-axi/SKILL.md`, where GitHub-based skill tooling can discover it directly. It selects a command and preserves only cross-command safety rules. Exact workflows, examples, and command-specific safety semantics live in version-matched `<command> --help`. The binary embeds the routing skill: `skill` prints it and `skill --output` installs it, while `setup skill` remains an alias. `skill --full` prints the opt-in detailed reference from `docs/agent-reference.md`. Bare invocation prints the separate short bootstrap guide. jj-axi does not invoke npm, npx, or agent-specific installers.
+5. **Resolved progressive disclosure.** The sole routing artifact lives at `skills/jj-axi/SKILL.md`, where GitHub-based skill tooling can discover it directly. Its body selects a command and preserves only cross-command safety rules. Exact workflows, examples, and command-specific safety semantics live in version-matched `<command> --help`. The binary embeds the routing skill: bare invocation prints its body without frontmatter, `skill` prints it whole, and `skill --output` installs it, while `setup skill` remains an alias. `skill --full` prints the opt-in detailed reference from `docs/agent-reference.md`. jj-axi does not invoke npm, npx, or agent-specific installers.
 6. **Agent-native fetch.** `bookmark list` deliberately reads cached local tracking state and never contacts remotes. A future top-level `fetch [--remote]` command should refresh repository-wide collaboration state, but its network, authentication, multi-remote, and partial-result contracts must be designed before implementation; it is not part of the bookmark slice.
 
 ## 3. Licensing position
@@ -99,9 +99,9 @@ No code or content dependency on any non-compete-licensed or unlicensed project.
 - Standalone Rust binary, installable via `cargo install` (later `cargo binstall` for prebuilt binaries).
 - `skills/jj-axi/SKILL.md` is the compact routing skill and is distributed directly through the standard `skills` CLI (`npx skills add <owner>/jj-axi --skill jj-axi`). The native `skill` command prints or atomically materializes the same bytes without invoking JavaScript tooling.
 - Command-specific workflows live in `<command> --help`, keeping instructions aligned with the installed binary.
+- Bare invocation prints the body of that same skill without frontmatter; there is no separate bootstrap artifact.
 - `docs/agent-reference.md` is the detailed opt-in reference printed by `skill --full`.
-- `skills/jj-axi/BOOTSTRAP.md` is the substantially shorter routing guide printed by bare invocation.
-- Agent discovery is skill- and bootstrap-led. jj-axi does not mutate agent configuration or install session hooks; see ADR 0004 and ADR 0007.
+- Agent discovery is skill-led with a bare-invocation view of the same content. jj-axi does not mutate agent configuration or install session hooks; see ADR 0004 and ADR 0007.
 
 ## 5. Success metrics
 
