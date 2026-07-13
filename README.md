@@ -5,6 +5,8 @@ A machine-first companion to [Jujutsu](https://jj-vcs.github.io/jj/) for non-tri
 Use `jj` for everyday work. Use jj-axi when an agent needs to route hunks, partition changes, reorder history, recover operations, or publish deterministically. jj-axi uses `jj-lib` directly while preserving ordinary Jujutsu repository compatibility.
 
 > **Status:** Experimental · **Language:** Rust · **License:** MIT
+>
+> Listed in the [AXI community catalog](https://axi.md/).
 
 ## Why
 
