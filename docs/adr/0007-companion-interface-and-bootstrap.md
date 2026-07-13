@@ -1,0 +1,7 @@
+# Companion interface with bootstrap routing
+
+jj-axi is a machine-first companion for non-trivial history editing, not the default replacement for Jujutsu's everyday CLI. Agents should use raw `jj` for routine inspection, simple change creation, and other clear non-interactive single-step work. They should switch to jj-axi when a workflow requires exact content selection, an editor, manual patch interpretation, multiple dependent mutations, operation-aware recovery, or deterministic publication. This narrows the interface an agent must learn and concentrates jj-axi where its leverage over raw Jujutsu is material.
+
+Running `jj-axi` without arguments prints a short bootstrap guide that explains this routing and points to the full canonical skill. `jj-axi skill` prints that skill, while `jj-axi skill --output` installs the same bytes with conflict protection; the older `setup skill` spelling remains a compatibility alias. Repository state remains available explicitly through `jj-axi inspect`. This reverses the no-argument `inspect` decision recorded in PRD milestone M6 and the former content-first rationale in the AXI applicability audit. Skill-led discovery and the rejection of session hooks in ADR 0004 remain unchanged; bare invocation is an additional low-context discovery path, not a hook.
+
+The bootstrap guide must stay substantially smaller than the canonical skill and describe when to switch interfaces rather than duplicate the command manual. Future multi-file skill packaging is deferred until the canonical skill actually requires it.

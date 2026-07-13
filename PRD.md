@@ -7,6 +7,8 @@
 
 See [README.md](./README.md) for vision, thesis, and design principles. This document is the working spec: command contracts, open design questions, licensing position, and milestones.
 
+jj-axi is a companion for non-trivial history editing, not a replacement for routine raw Jujutsu workflows. Simple inspection, change creation, and description should remain on `jj` when one non-interactive command is sufficient.
+
 ## 1. Command mapping
 
 Each command must have an explicit contract: which jj operation(s) it wraps, what it combines, and which AXI principle it primarily serves. No command ships without this row filled in.
@@ -63,11 +65,13 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 | `bookmark list/set/push` | `jj bookmark` + `jj git push` | Bounded multi-remote collaboration view over local tracking state; explicit safe local movement and exact-name publication. Listing never fetches. |
 | `pr status <number> [--repo <[host/]owner/name>]` | GitHub GraphQL API through authenticated `gh` | Explicit PR selection; normalized multi-host repository identity; aggregate check, review, and mergeability state; derived merge readiness and ordered blocking reasons. No prompts or raw GitHub schema output. |
 
-### Setup
+### Agent discovery and setup
 
 | Command | Wraps | Notes |
 |---|---|---|
-| `setup skill --output <path> [--force]` | — | Atomically materializes the embedded canonical `skills/jj-axi/SKILL.md`; idempotent for identical bytes and protective of differing or non-regular destinations. |
+| `jj-axi` | — | Prints the short bootstrap guide that routes routine work to raw `jj` and non-trivial history editing to jj-axi. Does not open a repository. |
+| `skill [--output <path> [--force]]` | — | Without `--output`, prints the full canonical skill to stdout. With `--output`, atomically materializes it; idempotent for identical bytes and protective of differing or non-regular destinations. |
+| `setup skill --output <path> [--force]` | — | Compatibility alias for protected skill installation. |
 
 ## 2. Open design questions
 
@@ -75,7 +79,7 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 2. **jj-lib API stability.** jj-lib is not a stable, versioned public API in the way the `jj` CLI's UX is. Need to pin target jj version(s) and decide how much abstraction insulates jj-axi from upstream breakage.
 3. **Scope of `validate`.** What invariants does this actually check that `inspect` and `undo` don't already surface? If the answer is "nothing new," cut the command rather than ship a placeholder.
 4. **Resolved `finish` composite boundary.** `--message` is optional; when omitted, the stored description must be non-empty. Without `--bookmark`, finish applies the optional message and returns readiness-only success without private finished metadata. With `--bookmark`, finish creates or fast-forwards only that exact name and pushes only that name. The remote is `git.push`, otherwise the sole configured remote, otherwise `origin`; no name or remote is inferred from tracking. Description and bookmark updates are one local operation retained when push fails, which returns a structured partial result.
-5. **Resolved skill distribution.** The canonical artifact lives at `skills/jj-axi/SKILL.md`, where GitHub-based skill tooling can discover it directly. The native binary embeds those exact bytes and `setup skill` copies them to an explicit destination; jj-axi does not invoke npm, npx, or agent-specific installers.
+5. **Resolved skill distribution.** The canonical artifact lives at `skills/jj-axi/SKILL.md`, where GitHub-based skill tooling can discover it directly. The native binary embeds those exact bytes: `skill` prints them and `skill --output` installs them, while `setup skill` remains an alias. Bare invocation prints the separate short bootstrap guide. jj-axi does not invoke npm, npx, or agent-specific installers.
 6. **Agent-native fetch.** `bookmark list` deliberately reads cached local tracking state and never contacts remotes. A future top-level `fetch [--remote]` command should refresh repository-wide collaboration state, but its network, authentication, multi-remote, and partial-result contracts must be designed before implementation; it is not part of the bookmark slice.
 
 ## 3. Licensing position
@@ -93,12 +97,13 @@ No code or content dependency on any non-compete-licensed or unlicensed project.
 ## 4. Distribution
 
 - Standalone Rust binary, installable via `cargo install` (later `cargo binstall` for prebuilt binaries).
-- `skills/jj-axi/SKILL.md` is the single canonical skill document and is distributed directly through the standard `skills` CLI (`npx skills add <owner>/jj-axi --skill jj-axi`). The native `setup skill` command embeds and atomically materializes the same bytes without invoking JavaScript tooling.
-- Agent discovery is skill-led. jj-axi does not mutate agent configuration or install session hooks; see ADR 0004.
+- `skills/jj-axi/SKILL.md` is the full canonical skill document and is distributed directly through the standard `skills` CLI (`npx skills add <owner>/jj-axi --skill jj-axi`). The native `skill` command prints or atomically materializes the same bytes without invoking JavaScript tooling.
+- `skills/jj-axi/BOOTSTRAP.md` is the substantially shorter routing guide printed by bare invocation.
+- Agent discovery is skill- and bootstrap-led. jj-axi does not mutate agent configuration or install session hooks; see ADR 0004 and ADR 0007.
 
 ## 5. Success metrics
 
-- Baseline: raw jj averages ~39.6 commands and 9/10 success on vcbench's split-commit task. jj-axi's `split`/`move` must beat both numbers materially, not marginally.
+- Baseline: raw jj averages ~39.6 commands and 9/10 success on vcbench's split-commit task. A hybrid workflow using raw `jj` for routine work and jj-axi for non-trivial history editing must beat both numbers materially, not marginally.
 - Maintain the [AXI applicability audit](./docs/axi-applicability.md), classifying each principle as applicable, adapted, or not applicable with product-specific rationale. jj-axi does not claim strict AXI conformance.
 - Consider AXI catalog submission only if maintainers accept the documented adaptations; catalog inclusion is not a product-success requirement.
 
@@ -109,7 +114,7 @@ No code or content dependency on any non-compete-licensed or unlicensed project.
 3. **M3 — History editing.** `split`, atomic multi-way `partition`, `move`, `absorb`, `reorder`. Hunk addressing is resolved by ADR 0001; partition identity, remainder, and transaction semantics are resolved by ADR 0006. This milestone addresses general editor-free history construction; benchmark results are supporting evidence, not its product definition.
 4. **M4 — Integrations.** Independent vertical slices: `operations`/`undo`, `bookmark`, `pr status`, and `setup skill`. Session hooks are excluded by ADR 0004.
 5. **M5 — Stack completion.** `squash` and `abandon`. Completes the general stack-editing command map before evaluation.
-6. **M6 — Benchmark.** First make no-argument invocation equivalent to `inspect`, closing the applicability-audit product gap. Then run vcbench-style evaluation against raw jj and publish results. Catalog submission is optional and requires acceptance of documented AXI adaptations. Benchmarking is evaluation work, not product definition.
+6. **M6 — Benchmark and discovery.** Evaluate the hybrid interface: raw `jj` for routine work and jj-axi for non-trivial history editing. Bare invocation provides a short routing guide, while `inspect` remains explicit. Run vcbench-style evaluation against raw jj and publish results. Catalog submission is optional and requires acceptance of documented AXI adaptations. Benchmarking is evaluation work, not product definition.
 
 `validate`/`repair` are explicitly deferred pending open question #3 and are not part of any milestone above.
 

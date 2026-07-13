@@ -19,15 +19,23 @@ fn skill_prints_exact_canonical_bytes_without_a_repository() {
     assert!(output.stderr.is_empty());
     assert_eq!(output.stdout, include_bytes!("../skills/jj-axi/SKILL.md"));
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+
+    let invalid = run(directory.path(), &["skill", "--force"]);
+    assert!(!invalid.status.success());
+    assert!(
+        String::from_utf8(invalid.stdout)
+            .unwrap()
+            .contains("code: invalid_argument")
+    );
 }
 
 #[test]
-fn setup_skill_creates_exact_canonical_bytes_and_retries_unchanged() {
+fn skill_output_creates_exact_bytes_and_setup_alias_retries_unchanged() {
     let directory = tempfile::tempdir().unwrap();
     let output_path = directory.path().join("SKILL.md");
     let path = output_path.to_str().unwrap();
 
-    let created = run(directory.path(), &["setup", "skill", "--output", path]);
+    let created = run(directory.path(), &["skill", "--output", path]);
     assert!(
         created.status.success(),
         "{}",

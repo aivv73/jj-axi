@@ -1,15 +1,30 @@
 ---
 name: jj-axi
-description: Use jj-axi for deterministic version-control work in Jujutsu repositories. Activate when .jj/ exists, project policy names Jujutsu or jj-axi, or a version-control request concerns a Jujutsu-managed repository.
+description: Use jj-axi when a Jujutsu task needs non-interactive hunk routing, multi-part partitioning, stack editing, operation-aware undo, or deterministic publication. Prefer raw jj for routine inspection and simple change creation.
 ---
 
-# Agent workflows with jj-axi
+# Deterministic history editing with jj-axi
 
-Use jj-axi as the primary command interface in a Jujutsu repository. It provides bounded TOON responses, structured errors, declarative history editing, and retry-safe mutations while preserving an ordinary Jujutsu repository.
+jj-axi is a machine-first companion to Jujutsu, not a replacement for its everyday CLI. Use raw `jj` when one ordinary, non-interactive command answers the question. Switch to jj-axi when history editing would require an editor, manual patch interpretation, or several dependent mutations.
 
-## Detect the repository model
+## Choose the narrowest interface
 
-Check for `.jj/` before choosing version-control commands. In a colocated repository, `.git/` may also exist; use Jujutsu or jj-axi for local history instead of Git commands.
+Use raw `jj` for routine work:
+
+```bash
+jj status
+jj log -n 20
+jj show <change>
+jj diff -r <change>
+jj new -m "implement token refresh"
+jj describe -r <change> -m "implement token refresh"
+```
+
+Before selective squash, patch splitting, moving hunks, multi-way partitioning, stack reordering, operation recovery, or validated publication, use jj-axi. Running `jj-axi` with no arguments prints a short routing guide; `jj-axi --help` reports the installed command surface.
+
+## Preserve the Jujutsu model
+
+Check for `.jj/` before choosing version-control commands. In a colocated repository, `.git/` may also exist; use Jujutsu interfaces for local history instead of Git commands.
 
 Jujutsu models work as **changes**:
 
@@ -20,63 +35,25 @@ Jujutsu models work as **changes**:
 
 Do not translate a Git workflow mechanically. There is usually no need for `git add`, stash management, detached-HEAD handling, or a local branch per task.
 
-## Start by inspecting
+## Request structured inspection only when it pays off
 
-Ask one state question first:
+Use `jj-axi inspect` when one structured snapshot should combine the current change, working-copy diff summary, and conflict/divergence counts. Focused jj-axi reads are useful when bounded machine output or canonical selectors matter:
 
 ```bash
 jj-axi inspect
-```
-
-It combines the current change, working-copy diff summary, and conflict/divergence counts. Use focused reads when needed:
-
-```bash
-jj-axi log --limit 20
-jj-axi log --conflicted
+jj-axi log --limit 20 --conflicted
 jj-axi show <change>
-jj-axi diff
 jj-axi diff <change> --full
 ```
 
-Diff bodies are bounded by default. Request `--full` only when the complete patch is necessary.
+Diff bodies are bounded by default. Request `--full` only when the complete patch is necessary. For ordinary status, log, show, or diff questions, prefer raw `jj`.
 
-## Manage the change lifecycle
+## Validate and publish deterministically
 
-Start a child change:
-
-```bash
-jj-axi new --message "implement token refresh"
-```
-
-Describe an existing change explicitly:
-
-```bash
-jj-axi describe <change> --message "implement token refresh"
-```
-
-Snapshot the current work into a described change and open a fresh child:
-
-```bash
-jj-axi checkpoint --message "complete token refresh"
-```
-
-Create or update a local bookmark without contacting a remote:
-
-```bash
-jj-axi bookmark set feature-name --to <change>
-```
-
-Use `bookmark set` when a task asks for a local branch, bookmark, or Git-visible ref but does not ask to publish or push. Do not use `finish --bookmark` for local-only completion.
-
-Validate readiness without publication:
+Use raw `jj bookmark set` for straightforward local bookmark placement. Use jj-axi when publication needs readiness validation, exact-name selection, and structured partial-failure state:
 
 ```bash
 jj-axi finish <change>
-```
-
-Publish one exact bookmark after readiness validation:
-
-```bash
 jj-axi finish <change> --bookmark feature-name
 ```
 
@@ -209,29 +186,25 @@ jj-axi pr status 42 --repo github.example.com/owner/repository
 
 When configured remotes identify one GitHub repository, `--repo` may be omitted. The response normalizes checks, reviews, mergeability, merge readiness, and all blocking reasons. This command requires an authenticated `gh` executable.
 
-## Raw Jujutsu fallbacks
+## Continue using raw Jujutsu
 
-Use raw `jj` only when the installed jj-axi interface does not expose the required capability. Confirm availability with:
-
-```bash
-jj-axi --help
-```
-
-Common fallbacks include:
+Raw `jj` remains the default for routine single-step work and for capabilities that jj-axi does not expose:
 
 ```bash
 jj git init --colocate       # initialize an existing Git checkout
 jj git fetch                 # refresh remote-tracking state
 jj workspace add <path>      # create another workspace
 jj resolve                   # resolve conflicted files
-jj status                    # diagnose details absent from a structured error
+jj status                    # inspect ordinary working-copy state
+jj new -m "description"      # create a straightforward child change
+jj describe -m "description" # describe the current change
 ```
 
 Raw commands may produce human-oriented output or open interactive tools. Supply non-interactive arguments where available. Do not substitute raw interactive `jj split` when declarative jj-axi hunk routing can express the task.
 
 ## Safe operating rules
 
-- Inspect before mutating when the current change or target is uncertain.
+- Inspect with raw `jj` or structured jj-axi output before mutating when the current change or target is uncertain.
 - Use explicit change IDs, bookmark names, operation IDs, remotes, and PR numbers.
 - Treat structured partial results as changed state, not ordinary failures.
 - Do not parse human terminal prose when a jj-axi schema exists.

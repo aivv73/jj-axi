@@ -1,16 +1,16 @@
 # jj-axi
 
-An agent-native command-line interface for [Jujutsu](https://jj-vcs.github.io/jj/).
+A machine-first companion to [Jujutsu](https://jj-vcs.github.io/jj/) for non-trivial history editing.
 
-jj-axi turns common version-control reasoning tasks into deterministic, non-interactive commands with compact TOON responses. It uses `jj-lib` directly while preserving ordinary Jujutsu repository compatibility.
+Use `jj` for everyday work. Use jj-axi when an agent needs to route hunks, partition changes, reorder history, recover operations, or publish deterministically. jj-axi uses `jj-lib` directly while preserving ordinary Jujutsu repository compatibility.
 
 > **Status:** Experimental · **Language:** Rust · **License:** MIT
 
 ## Why
 
-Jujutsu already provides a strong model for agent-driven version control: stable change identities, rewrite-first history, first-class conflicts, and an operation log. Its standard CLI is intentionally designed for humans, however, and complex agent workflows can still require repeated inspection, parsing, and interactive editing.
+Jujutsu already provides a strong model and an effective CLI for routine agent work: status, log, new changes, descriptions, and many other operations need no replacement. The leverage gap appears when history editing requires an interactive editor, manual interpretation of patches, or several dependent mutations.
 
-jj-axi optimizes that interface boundary:
+jj-axi targets that narrow interface:
 
 - one command per reasoning question;
 - stable machine-first schemas;
@@ -20,13 +20,17 @@ jj-axi optimizes that interface boundary:
 - structured empty, conflict, partial-result, and recovery states;
 - raw repository compatibility—no private jj-axi metadata model.
 
+A compact fallback instruction is usually enough to introduce the tool:
+
+> Use `jj` for ordinary repository inspection and simple change creation. Before interactive or multi-step history editing—such as selective squash, patch splitting, moving hunks between changes, or rebasing a stack—run `jj-axi` and follow its instructions.
+
 ## Example
 
 ```bash
-# No arguments prints the current repository snapshot.
+# No arguments prints a short guide explaining when to switch from raw jj.
 jj-axi
 
-# Equivalent explicit inspection.
+# Repository inspection remains explicit when structured state is useful.
 jj-axi inspect
 
 # Discover exact post-image hunks from one immutable snapshot.
@@ -121,6 +125,8 @@ Partition applies all parts, descendant rewrites, bookmarks, and workspace updat
 
 ### Change construction and history editing
 
+Routine creation and description can stay on raw `jj`; compatibility and composite commands remain available:
+
 - `new`, `describe`, `checkpoint`;
 - `split`, `partition`, `move`, `absorb`;
 - `reorder`, `squash`, `abandon`;
@@ -134,8 +140,10 @@ Partition applies all parts, descendant rewrites, bookmarks, and workspace updat
 
 ### Agent integration
 
+- no arguments — print the short bootstrap guide;
 - `skill` — print the canonical agent skill to stdout;
-- `setup skill` — install it atomically with conflict protection.
+- `skill --output <path> [--force]` — install it atomically with conflict protection;
+- `setup skill` — compatibility alias for protected installation.
 
 Run `jj-axi --help` or `jj-axi <command> --help` for the installed command contract.
 
@@ -166,20 +174,14 @@ Install the canonical skill with the Vercel Skills CLI:
 npx skills add aivv73/jj-axi --skill jj-axi
 ```
 
-Alternatively, print the embedded skill and redirect it with ordinary shell tools:
+Alternatively, install the embedded skill atomically. Existing differing content is protected unless `--force` is supplied:
 
 ```bash
 mkdir -p .agents/skills/jj-axi
-jj-axi skill > .agents/skills/jj-axi/SKILL.md
+jj-axi skill --output .agents/skills/jj-axi/SKILL.md
 ```
 
-For protected installation, jj-axi can write the file atomically and refuse to replace differing content unless `--force` is supplied:
-
-```bash
-jj-axi setup skill --output .agents/skills/jj-axi/SKILL.md
-```
-
-Both commands use the exact bytes embedded from [`skills/jj-axi/SKILL.md`](./skills/jj-axi/SKILL.md). Installing the skill does not install the jj-axi binary itself.
+For shell composition, `jj-axi skill` prints the same exact bytes to stdout. The older `jj-axi setup skill --output ...` spelling remains a compatibility alias. The embedded source is [`skills/jj-axi/SKILL.md`](./skills/jj-axi/SKILL.md); installing it does not install the jj-axi binary itself.
 
 ## Compatibility and safety
 
@@ -214,7 +216,7 @@ A Codex `gpt-5.6-sol` low-effort, `k=3` calibration across five version-control 
 | raw Jujutsu + external skill | 14/15 | 98.8s | 15.3 |
 | jj-axi + canonical skill | **15/15** | **46.3s** | **9.9** |
 
-In the calibrated split task, jj-axi completed 3/3 runs with one mutation and 9.7 task VC commands on average, versus Git's 28.0 commands. These are small-sample pilot results, not a general ranking or statistical proof. Correctness remains the gate, and benchmark work does not define product semantics.
+In the calibrated split task, jj-axi completed 3/3 runs with one mutation and 9.7 task VC commands on average, versus Git's 28.0 commands. These are small-sample pilot results, not a general ranking or statistical proof. They predate the hybrid companion positioning and should not be read as evidence for that routing strategy; a dedicated raw-jj-plus-jj-axi benchmark is still needed. Correctness remains the gate, and benchmark work does not define product semantics.
 
 The harness and task methodology are maintained in the [`aivv73/version-control-bench`](https://github.com/aivv73/version-control-bench) fork.
 

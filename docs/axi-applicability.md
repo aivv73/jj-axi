@@ -20,8 +20,8 @@ A gap becomes implementation work only when closing it improves jj-axi without r
 | 4 | Pre-computed aggregates | Applicable | `inspect` combines state and diff statistics; bookmark listing computes ahead/behind; PR status aggregates checks and derives merge readiness; history edits report rewrite/conflict impact; absorb supports structured preview. | None. |
 | 5 | Definitive empty states | Applicable | Collections render as `[]`, optional unavailable values have explicit statuses/nulls, no checks produce numeric zeroes plus `none`, and no-op mutations report `unchanged`. | None. |
 | 6 | Structured errors and exit codes | Adapted | Errors are structured, failures exit non-zero, unknown flags fail loudly, commands avoid prompts, and partial mutations report retained state. Idempotency is provided where it can be proven; destructive history operations do not guess that an unknown retry previously succeeded. | Preserve provable retry safety rather than promise blanket mutation idempotency. |
-| 7 | Ambient context | Adapted | The canonical skill provides discovery and directs agents to fresh on-demand `inspect`. ADR 0004 rejects agent-specific session hooks because they mutate configuration and inject potentially stale startup state. | Runtimes without skill discovery receive no proactive context. This is accepted unless product evidence shows a real discovery failure. |
-| 8 | Content first | Applicable | Running `jj-axi` with no arguments is exactly equivalent to `jj-axi inspect`, providing a current repository snapshot with change, diff-stat, conflict, and divergence state. | None. |
+| 7 | Ambient context | Adapted | The canonical skill provides proactive discovery, while bare invocation returns a short routing guide on demand. ADR 0004 rejects agent-specific session hooks because they mutate configuration and inject potentially stale startup state. | Runtimes without skill discovery must invoke jj-axi before receiving its routing context. |
+| 8 | Content first | Applicable | Running `jj-axi` with no arguments returns the short bootstrap guide directly rather than generic help. Fresh structured repository state remains explicit through `jj-axi inspect`. | Keep the bootstrap substantially smaller than the canonical skill. |
 | 9 | Contextual disclosure | Adapted | jj-axi returns deterministic recovery evidence—nearest hunks, blocking reasons, cursors, partial remote state, ambiguity candidates, and rewrite/conflict impact—without speculative next-step advice after ordinary successes. | Continue adding continuation data only where it is objectively actionable. |
 | 10 | Consistent help | Applicable | Root and nested commands use one `--help` convention, unknown options fail consistently, and the canonical skill points to installed-version help when capability is uncertain. | None. |
 
@@ -34,7 +34,7 @@ A gap becomes implementation work only when closing it improves jj-axi without r
 
 ## Positioning
 
-jj-axi is an agent-native CLI that applies AXI principles with documented product-specific adaptations. It does not claim strict AXI conformance. Catalog submission is appropriate only if AXI maintainers accept these adaptations, especially skill-led discovery in place of hook-first ambient context.
+jj-axi is a machine-first Jujutsu companion for non-trivial history editing. It applies AXI principles with documented product-specific adaptations and does not claim strict AXI conformance. Catalog submission is appropriate only if AXI maintainers accept skill- and bootstrap-led discovery in place of hook-first ambient context.
 
 ## Re-audit policy
 

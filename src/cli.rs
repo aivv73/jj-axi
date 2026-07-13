@@ -89,9 +89,9 @@ pub enum CommandInput {
         number: u64,
         repository: Option<String>,
     },
-    Skill,
-    SetupSkill {
-        output: String,
+    Bootstrap,
+    Skill {
+        output: Option<String>,
         force: bool,
     },
     Squash {
@@ -125,7 +125,11 @@ pub enum LogField {
 }
 
 #[derive(Parser)]
-#[command(disable_help_subcommand = true, version)]
+#[command(
+    disable_help_subcommand = true,
+    version,
+    about = "Machine-first Jujutsu companion for non-trivial history editing"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -156,6 +160,7 @@ enum Command {
         #[arg(long)]
         bookmark: Option<String>,
     },
+    /// Print a structured snapshot of the current repository state.
     Inspect,
     Log {
         #[arg(long, default_value_t = 20, value_parser = parse_limit)]
@@ -235,7 +240,16 @@ enum Command {
         #[command(subcommand)]
         command: PrCommand,
     },
-    Skill,
+    /// Print or install the full canonical agent skill.
+    Skill {
+        /// Install the skill atomically at this path instead of printing it.
+        #[arg(long)]
+        output: Option<String>,
+        /// Replace differing existing content. Requires --output.
+        #[arg(long, requires = "output")]
+        force: bool,
+    },
+    /// Compatibility setup commands.
     Setup {
         #[command(subcommand)]
         command: SetupCommand,
@@ -292,7 +306,7 @@ where
     T: Into<std::ffi::OsString> + Clone,
 {
     match Cli::try_parse_from(args) {
-        Ok(Cli { command: None }) => ParsedCli::Command(CommandInput::Inspect),
+        Ok(Cli { command: None }) => ParsedCli::Command(CommandInput::Bootstrap),
         Ok(Cli {
             command: Some(command),
         }) => ParsedCli::Command(match command {
@@ -416,10 +430,13 @@ where
             Command::Pr {
                 command: PrCommand::Status { number, repository },
             } => CommandInput::PrStatus { number, repository },
-            Command::Skill => CommandInput::Skill,
+            Command::Skill { output, force } => CommandInput::Skill { output, force },
             Command::Setup {
                 command: SetupCommand::Skill { output, force },
-            } => CommandInput::SetupSkill { output, force },
+            } => CommandInput::Skill {
+                output: Some(output),
+                force,
+            },
         }),
         Err(error)
             if matches!(

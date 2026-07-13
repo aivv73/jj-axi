@@ -16,12 +16,26 @@ fn version_reports_the_compiled_package_version_without_a_repository() {
 }
 
 #[test]
-fn no_arguments_is_the_inspect_home_view() {
-    let directory = repository();
-    let home = successful_output(directory.path(), &[]);
-    let inspect = successful_output(directory.path(), &["inspect"]);
-    assert_eq!(home, inspect);
-    assert!(home.contains("kind: inspect"));
+fn no_arguments_prints_the_short_bootstrap_without_a_repository() {
+    let directory = tempfile::tempdir().expect("create temporary directory");
+    let output = run_axi(directory.path(), &[]);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        output.stdout,
+        include_bytes!("../skills/jj-axi/BOOTSTRAP.md")
+    );
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("jj-axi skill")
+    );
+    assert!(
+        include_bytes!("../skills/jj-axi/BOOTSTRAP.md").len() * 3
+            < include_bytes!("../skills/jj-axi/SKILL.md").len(),
+        "bootstrap must stay substantially smaller than the full skill"
+    );
 }
 
 #[test]
