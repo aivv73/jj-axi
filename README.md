@@ -1,86 +1,194 @@
 # jj-axi
 
-**Status:** Draft
-**Language:** Rust
-**License:** MIT / Apache-2.0
+An agent-native command-line interface for [Jujutsu](https://jj-vcs.github.io/jj/).
 
-## Vision
+jj-axi turns common version-control reasoning tasks into deterministic, non-interactive commands with compact TOON responses. It uses `jj-lib` directly while preserving ordinary Jujutsu repository compatibility.
 
-Modern version control systems were designed for humans typing commands.
-Modern software development is increasingly performed by autonomous agents operating through shell execution.
+> **Status:** Experimental · **Language:** Rust · **License:** MIT OR Apache-2.0
 
-The bottleneck is no longer the version control model — it is the command-line interface.
+## Why
 
-jj-axi is an agent-native CLI for Jujutsu. It exposes jj's change-based model through an interface optimized for autonomous reasoning rather than interactive terminal use.
+Jujutsu already provides a strong model for agent-driven version control: stable change identities, rewrite-first history, first-class conflicts, and an operation log. Its standard CLI is intentionally designed for humans, however, and complex agent workflows can still require repeated inspection, parsing, and interactive editing.
 
-## Problem
+jj-axi optimizes that interface boundary:
 
-Version control agents currently interact with VCSes by composing long sequences of shell commands. A typical workflow may require:
+- one command per reasoning question;
+- stable machine-first schemas;
+- no prompts or editors;
+- exact, fail-loud selectors;
+- atomic workflow-level mutations;
+- structured empty, conflict, partial-result, and recovery states;
+- raw repository compatibility—no private jj-axi metadata model.
 
-```
-status
-log
-show
-diff
-split
-describe
-status
-```
+## Example
 
-before an agent has enough information to continue. Each shell invocation has cost: latency, tokens, reasoning, failure surface. [vcbench](https://vcbench.dev/) demonstrates these costs dominate overall agent performance — jj's split-commit task alone averages ~39.6 commands per run, with the only sub-100% success rate in the benchmark.
+```bash
+# No arguments opens the live repository home view.
+jj-axi
 
-GitButler currently achieves the strongest benchmark results by exposing higher-level operations over Git. Jujutsu already has a more agent-friendly internal model than Git:
+# Equivalent explicit inspection.
+jj-axi inspect
 
-- immutable change identities
-- operation log
-- first-class conflicts
-- `absorb`
-- rewrite-first workflow
+# Discover exact post-image hunks from one immutable snapshot.
+jj-axi diff <change> --hunks
 
-However, those capabilities remain exposed through a human-oriented CLI.
+# Route one hunk into a new change without an editor.
+jj-axi split <change> \
+  --hunks 'src/lib.rs:12-18' \
+  --into 'extract parser'
 
-## Thesis
-
-The VCS model is not the bottleneck. The interface is.
-
-jj-axi applies [AXI](https://github.com/kunchenguid/axi) principles to expose jj as an agent-native interface.
-
-## Goals
-
-Build a CLI that minimizes shell round-trips, output tokens, parsing complexity, and interactive workflows — while preserving full compatibility with standard jj repositories. Success is measured by objective improvements on vcbench-style tasks against raw jj.
-
-## Non-goals
-
-Not another VCS. Not another Git. Not a GUI. Not a GitButler clone. Not an alternative merge algorithm. Not another agent framework.
-
-## Design principles
-
-1. **Intent over mechanism.** Commands represent goals (`finish`, `publish`) rather than implementation details.
-2. **One command, one reasoning question.** Instead of `status` + `log` + `diff`, agents ask `inspect`.
-3. **Machine-first output.** Default output is TOON. Human-readable output is optional.
-4. **Stable schemas.** Responses are contracts — never prose, never shifting field names.
-5. **Combined operations.** Common multi-step workflows become single commands (e.g. moving hunks between changes as one call, not a `split`/`edit`/`restore`/`describe` chain).
-6. **Deterministic UX.** No prompts, no interactive editors, no ambiguous errors. Every command is reproducible.
-
-## Architecture
-
-```
-Claude Code / Codex / OpenCode / Slopflow
-                │
-                ▼
-             jj-axi
-                │
-              jj-lib
-                │
-           Repository
+# Undo the latest user-visible mutation while preserving newer work.
+jj-axi undo
 ```
 
-jj-axi owns schemas, output, and workflow composition. jj owns storage, merge, history, and conflicts.
+Normal operational output is TOON:
 
-## Why this project exists
+```yaml
+schema_version: 1
+kind: inspect
+data:
+  current_change:
+    change_id: ...
+    description: ...
+  diff_stat:
+    changed_files: 2
+    added_lines: 14
+    removed_lines: 3
+```
 
-Git solved distributed version control. Jujutsu improved the version control model. GitButler demonstrated that interface design dramatically affects agent performance.
+## Atomic multi-way partitioning
 
-jj-axi asks the next question: what should a version control CLI look like if autonomous agents — not humans — are its primary users?
+A mixed change can be decomposed into several ordered changes from one guarded snapshot. This avoids repeated `diff → split → diff → split` loops and routes the remainder explicitly.
 
-See [PRD.md](./PRD.md) for the working specification, open design questions, and licensing notes.
+First obtain canonical hunks and the full snapshot commit ID:
+
+```bash
+jj-axi diff <change> --hunks
+```
+
+Create a JSON manifest:
+
+```json
+{
+  "schema_version": 1,
+  "source_commit_id": "<full commit id>",
+  "parts": [
+    {
+      "description": "refactor validation helpers",
+      "hunks": [
+        {"path": "src/lead.rs", "lines": "21-27"}
+      ]
+    },
+    {
+      "description": "tune lead scoring",
+      "hunks": [
+        {"path": "src/lead.rs", "lines": "38-43"}
+      ]
+    }
+  ],
+  "remainder": {"destination": "working_copy"}
+}
+```
+
+Preview and apply it through stdin so creating the plan cannot stale the guarded source:
+
+```bash
+cat partition.json | jj-axi partition <change> --spec-file - --dry-run
+cat partition.json | jj-axi partition <change> --spec-file -
+```
+
+Remainder policies:
+
+- `remaining_change` — create a separate remainder change;
+- `working_copy` — route unfinished content into the invoking workspace change;
+- `require_empty` — reject the plan unless every source change is assigned.
+
+Partition applies all parts, descendant rewrites, bookmarks, and workspace updates as one operation and one undo boundary. Rewrite conflicts are successful structured state rather than ambiguous command failure.
+
+## Command surface
+
+### Repository inspection
+
+- `inspect` — current change, diff statistics, conflicts, and divergence;
+- `log` — bounded structured history with selectable fields;
+- `show` — one change and its patch;
+- `diff [change] [--hunks]` — bounded patch and optional canonical hunk inventory;
+- `operations` — classified operation history.
+
+### Change construction and history editing
+
+- `new`, `describe`, `checkpoint`;
+- `split`, `partition`, `move`, `absorb`;
+- `reorder`, `squash`, `abandon`;
+- `undo [--to <operation-id>]`.
+
+### Bookmarks and publication
+
+- `bookmark list`, `bookmark set`, `bookmark push`;
+- `finish` — readiness validation with optional exact bookmark publication;
+- `pr status` — GitHub pull-request readiness through non-interactive `gh api`.
+
+Run `jj-axi --help` or `jj-axi <command> --help` for the installed command contract.
+
+## Installation
+
+Prerequisites:
+
+- Rust 1.89 or newer;
+- Jujutsu available as `jj` for working-copy synchronization;
+- `gh` only when using `pr status`.
+
+Build from source:
+
+```bash
+git clone https://github.com/aivv73/jj-axi.git
+cd jj-axi
+cargo build --release
+./target/release/jj-axi --version
+```
+
+Install the canonical agent skill explicitly:
+
+```bash
+jj-axi setup skill --output .agents/skills/jj-axi/SKILL.md
+```
+
+The generated bytes are embedded from [`skills/jj-axi/SKILL.md`](./skills/jj-axi/SKILL.md). Existing differing files are protected unless `--force` is supplied.
+
+## Compatibility and safety
+
+- jj-axi operates on standard Jujutsu repositories through `jj-lib`.
+- History selectors use exact post-image hunk boundaries; stale or partial ranges fail with bounded canonical recovery candidates.
+- Read commands do not fetch remotes.
+- Publication uses explicit bookmarks and structured partial results.
+- GitHub authentication, SSO, and enterprise routing are delegated to `gh`.
+- Bare undo skips synchronization-only and foundation operations.
+
+The architecture and trade-offs are documented in [`docs/adr/`](./docs/adr/). Domain terminology lives in [`CONTEXT.md`](./CONTEXT.md).
+
+## Preliminary benchmark evidence
+
+A Codex `gpt-5.6-sol` low-effort, `k=3` calibration across five version-control tasks produced:
+
+| Arm | Correct | Mean wall time | Mean task VC commands |
+| --- | ---: | ---: | ---: |
+| plain Git | 15/15 | 50.1s | 20.1 |
+| GitButler + skill | 14/15 | 71.5s | 11.0 |
+| raw Jujutsu + external skill | 14/15 | 98.8s | 15.3 |
+| jj-axi + canonical skill | **15/15** | **46.3s** | **9.9** |
+
+In the calibrated split task, jj-axi completed 3/3 runs with one mutation and 9.7 task VC commands on average, versus Git's 28.0 commands. These are small-sample pilot results, not a general ranking or statistical proof. Correctness remains the gate, and benchmark work does not define product semantics.
+
+The harness and task methodology are maintained in the [`aivv73/version-control-bench`](https://github.com/aivv73/version-control-bench) fork.
+
+## Design lineage
+
+jj-axi is informed by the [AXI](https://github.com/kunchenguid/axi) principles, with deliberate product-specific adaptations. It does **not** claim strict AXI conformance. See the [AXI applicability audit](./docs/axi-applicability.md).
+
+## Project documentation
+
+- [Product requirements](./PRD.md)
+- [Domain glossary](./CONTEXT.md)
+- [AXI applicability audit](./docs/axi-applicability.md)
+- [Architecture decisions](./docs/adr/)
+- [Canonical agent skill](./skills/jj-axi/SKILL.md)
