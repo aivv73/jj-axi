@@ -208,6 +208,7 @@ jj-axi is informed by the [AXI](https://github.com/kunchenguid/axi) principles, 
 
 ## Project documentation
 
+- [Contributing](./CONTRIBUTING.md)
 - [Product requirements](./PRD.md)
 - [Domain glossary](./CONTEXT.md)
 - [AXI applicability audit](./docs/axi-applicability.md)
