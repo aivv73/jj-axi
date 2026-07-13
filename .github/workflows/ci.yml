@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-15-intel
+          - macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.89
+        run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt --no-self-update
+
+      - name: Select Rust 1.89
+        run: rustup default 1.89.0
+
+      - name: Install Jujutsu 0.43.0
+        shell: bash
+        run: |
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) target=x86_64-unknown-linux-musl ;;
+            Linux-aarch64) target=aarch64-unknown-linux-musl ;;
+            Darwin-x86_64) target=x86_64-apple-darwin ;;
+            Darwin-arm64) target=aarch64-apple-darwin ;;
+            *) echo "Unsupported runner: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+          esac
+          archive="jj-v0.43.0-${target}.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            "https://github.com/jj-vcs/jj/releases/download/v0.43.0/${archive}" \
+            --output "${RUNNER_TEMP}/${archive}"
+          mkdir "${RUNNER_TEMP}/jj-bin"
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}/jj-bin" ./jj
+          echo "${RUNNER_TEMP}/jj-bin" >> "${GITHUB_PATH}"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check compilation
+        run: cargo check --locked
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Check Cargo package
+        if: runner.os == 'Linux'
+        run: cargo package --locked
+
+      - name: Check whitespace errors
+        run: git diff --check

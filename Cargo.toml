@@ -5,6 +5,9 @@ edition = "2024"
 rust-version = "1.89"
 description = "Agent-native command-line interface for Jujutsu"
 license = "MIT"
+repository = "https://github.com/aivv73/jj-axi"
+homepage = "https://github.com/aivv73/jj-axi"
+readme = "README.md"
 
 [dependencies]
 chrono = "=0.4.44"
