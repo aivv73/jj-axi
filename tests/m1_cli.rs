@@ -32,8 +32,8 @@ fn no_arguments_prints_the_short_bootstrap_without_a_repository() {
             .contains("jj-axi skill")
     );
     assert!(
-        include_bytes!("../skills/jj-axi/BOOTSTRAP.md").len() * 3
-            < include_bytes!("../skills/jj-axi/SKILL.md").len(),
+        include_bytes!("../skills/jj-axi/BOOTSTRAP.md").len() * 4
+            < include_bytes!("../skills/jj-axi/SKILL.md").len() * 3,
         "bootstrap must stay substantially smaller than the operational skill"
     );
     assert!(

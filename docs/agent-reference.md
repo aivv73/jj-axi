@@ -1,6 +1,6 @@
 # jj-axi agent reference
 
-This is the detailed semantic reference. Run `jj-axi skill` for the compact operational skill or `jj-axi --help` for installed command syntax.
+This is the detailed semantic reference. Run `jj-axi skill` for the compact command router and `jj-axi <command> --help` for the version-matched execution contract.
 
 jj-axi is a machine-first companion to Jujutsu, not a replacement for its everyday CLI. Use raw `jj` when one ordinary, non-interactive command answers the question. Switch to jj-axi when history editing would require an editor, manual patch interpretation, or several dependent mutations.
 
@@ -121,7 +121,15 @@ Move all content from one change into another without an editor:
 jj-axi squash <from> --into <to>
 ```
 
-Use `move` rather than `squash` for selective hunk routing. History editing rejects unsupported shapes and content rather than guessing.
+Use `move` rather than `squash` for selective hunk routing.
+
+Remove one visible change and reparent its descendants:
+
+```bash
+jj-axi abandon <change>
+```
+
+Abandon does not reverse pushes or other external effects. History editing rejects unsupported shapes and content rather than guessing.
 
 ## Inspect and undo operations
 

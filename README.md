@@ -141,9 +141,9 @@ Routine creation and description can stay on raw `jj`; compatibility and composi
 ### Agent integration
 
 - no arguments — print the short bootstrap guide;
-- `skill` — print the compact operational skill to stdout;
+- `skill` — print the compact routing skill to stdout;
 - `skill --full` — print the detailed agent reference;
-- `skill --output <path> [--force]` — install the operational skill atomically with conflict protection;
+- `skill --output <path> [--force]` — install the routing skill atomically with conflict protection;
 - `setup skill` — compatibility alias for protected installation.
 
 Run `jj-axi --help` or `jj-axi <command> --help` for the installed command contract.
@@ -174,11 +174,11 @@ jj-axi separates discovery, routine operation, and detailed reference material s
 | Invocation | Purpose |
 | --- | --- |
 | `jj-axi` | Short routing guide: when to use raw `jj` or jj-axi |
-| `jj-axi skill` | Compact operational instructions for primary history workflows |
-| `jj-axi skill --full` | Detailed semantics for secondary commands and edge cases |
-| `jj-axi --help` | Syntax supported by the installed binary |
+| `jj-axi skill` | Compact command router and cross-command safety rules |
+| `jj-axi skill --full` | Detailed reference for secondary commands and edge cases |
+| `jj-axi <command> --help` | Version-matched workflow, examples, and safety contract |
 
-Install the compact operational skill with the Vercel Skills CLI:
+Install the compact routing skill with the Vercel Skills CLI:
 
 ```bash
 npx skills add aivv73/jj-axi --skill jj-axi
@@ -240,5 +240,5 @@ jj-axi is informed by the [AXI](https://github.com/kunchenguid/axi) principles, 
 - [Domain glossary](./CONTEXT.md)
 - [AXI applicability audit](./docs/axi-applicability.md)
 - [Architecture decisions](./docs/adr/)
-- [Compact operational skill](./skills/jj-axi/SKILL.md)
+- [Compact routing skill](./skills/jj-axi/SKILL.md)
 - [Detailed agent reference](./docs/agent-reference.md)

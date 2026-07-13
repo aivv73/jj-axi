@@ -1,6 +1,156 @@
 use clap::error::ErrorKind;
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 
+const DIFF_HELP: &str = r#"Print a bounded structured diff.
+
+For split, move, or partition, first run:
+  jj-axi diff <change> --hunks
+
+The response includes one immutable snapshot commit ID and canonical post-image
+path/lines selectors. Copy those values unchanged. Do not derive line ranges
+from rendered patch text; selectors never snap to nearby content. Use --full
+only when the complete patch body is required.
+
+Example:
+  jj-axi diff @ --hunks"#;
+
+const SPLIT_HELP: &str = r#"Route exact selected hunks from one change into a new described change.
+
+First run `jj-axi diff <change> --hunks`, then copy returned path/lines selectors
+unchanged into --hunks. Separate multiple selectors with commas. Use N-0 exactly
+as returned for deletion-only boundaries. Stale, partial, duplicate, binary, or
+unsupported selections fail before history mutation.
+
+Example:
+  jj-axi split @ --hunks 'src/lib.rs:12-18,tests/lib.rs:8-14' --into 'extract parser'"#;
+
+const MOVE_HELP: &str = r#"Move exact selected hunks between two existing changes.
+
+First run `jj-axi diff <source> --hunks`, then copy returned path/lines selectors
+unchanged into --hunks. Use move only when both source and destination already
+exist; use split to create a new destination. Selectors never snap, and invalid
+or stale selections fail before history mutation.
+
+Example:
+  jj-axi move --from <source> --to <destination> --hunks 'src/lib.rs:12-18'"#;
+
+const PARTITION_HELP: &str = r#"Atomically split one source change into multiple ordered changes.
+
+First run `jj-axi diff <change> --hunks`. Build the manifest from that one
+response, copying the full snapshot.commit_id and canonical path/lines selectors
+unchanged. Pipe the manifest through stdin so writing it cannot stale the source:
+
+  cat partition.json | jj-axi partition <change> --spec-file - --dry-run --details
+  cat partition.json | jj-axi partition <change> --spec-file -
+
+Manifest shape:
+  {
+    "schema_version": 1,
+    "source_commit_id": "<full snapshot commit id>",
+    "parts": [
+      {"description": "first", "hunks": [{"path": "src/a.rs", "lines": "12-18"}]},
+      {"description": "second", "hunks": [{"path": "src/b.rs", "lines": "7-9"}]}
+    ],
+    "remainder": {"destination": "working_copy"}
+  }
+
+Parts are ordered oldest to newest. Remainder destination must be one of:
+  working_copy     route unfinished content to the invoking working-copy change
+  remaining_change create a separate remainder change
+  require_empty    reject any unassigned or unsupported content
+
+Inspect a --details dry-run unless every assignment is mechanically obvious.
+The source commit guard rejects stale plans. Apply is one operation and one undo
+boundary; rewrite conflicts are returned as successful structured state."#;
+
+const ABSORB_HELP: &str = r#"Infer destinations and absorb eligible working-copy changes into mutable ancestors.
+
+Always preview first. The dry-run reports planned destinations, ambiguous
+insertions, conflicts, symlinks, new files, and other skipped content without
+mutating history. Review that structured plan before applying.
+
+Example:
+  jj-axi absorb --dry-run
+  jj-axi absorb"#;
+
+const REORDER_HELP: &str = r#"Reorder a contiguous linear stack without an editor.
+
+Pass every selected change exactly once, ordered from oldest to newest. The
+selection must have a supported linear shape; omitted side descendants are
+rebased. Unsupported or ambiguous topology fails rather than guessing. Rewrite
+conflicts are returned as structured successful state.
+
+Example:
+  jj-axi reorder --sequence '<oldest>,<middle>,<newest>'"#;
+
+const SQUASH_HELP: &str = r#"Move all content from one change into another and abandon the emptied source.
+
+This is full-content squash, not selective hunk routing. Use move for selected
+hunks. Without --into, the source must have exactly one parent. When both source
+and destination descriptions are non-empty, provide --message so no editor or
+implicit description concatenation is needed.
+
+Example:
+  jj-axi squash <source> --into <destination> --message 'combined change'"#;
+
+const ABANDON_HELP: &str = r#"Remove one visible change and reparent its descendants without an editor.
+
+Abandon rewrites descendants through normal Jujutsu semantics; it does not
+reverse pushes or other external effects. Local bookmarks and the invoking
+working-copy change are updated explicitly and reported in the structured
+result. A retry is treated as unchanged only when operation history proves the
+same change was already abandoned.
+
+Example:
+  jj-axi abandon <change>"#;
+
+const OPERATIONS_HELP: &str = r#"Inspect the bounded repository operation graph without mutating it.
+
+The response classifies user-visible mutations, synchronization-only operations,
+prior undo operations, and foundation operations, and reports undo eligibility.
+Use the returned operation IDs with `jj-axi undo --to <operation-id>`.
+
+Example:
+  jj-axi operations --limit 20"#;
+
+const UNDO_HELP: &str = r#"Restore repository state through the operation log.
+
+Without --to, undo reverses the latest user-visible repository mutation while
+preserving newer synchronized working-copy content. It skips synchronization-only
+and prior undo operations. Divergent operation history requires an explicit
+reachable target. Foundation operations cannot be removed. Undo is local and
+does not reverse pushes or other external effects.
+
+Examples:
+  jj-axi undo
+  jj-axi undo --to <operation-id>"#;
+
+const FINISH_HELP: &str = r#"Validate local readiness and optionally publish one exact bookmark.
+
+`finish <change>` validates local readiness. `finish <change> --bookmark <name>`
+also creates or fast-forwards that exact bookmark and pushes only that name.
+finish never invents a bookmark or infers one from context.
+
+When --message is omitted, the stored description must be non-empty. Description
+and bookmark updates are one local operation committed before push. A push
+failure returns a structured partial result and retains that local desired state.
+Inspect partial state before retrying. The publication remote is git.push,
+otherwise the sole configured remote, otherwise origin.
+
+Examples:
+  jj-axi finish <change>
+  jj-axi finish <change> --bookmark feature-name"#;
+
+const BOOKMARK_PUSH_HELP: &str = r#"Publish one existing local bookmark with readiness and lease protection.
+
+The command pushes only the exact supplied name and never creates or guesses a
+bookmark. Use --remote to select an explicit publication remote. A failed push
+may return structured partial state; inspect it before retrying. Repeating the
+command is safe when the remote already matches.
+
+Example:
+  jj-axi bookmark push feature-name --remote origin"#;
+
 #[derive(Debug)]
 pub enum ParsedCli {
     Help(clap::Error),
@@ -151,9 +301,7 @@ enum Command {
         #[arg(long)]
         message: String,
     },
-    #[command(
-        long_about = "Finish a change.\n\nSteps:\n  Description  Runs when --message is supplied; otherwise the stored description must be non-empty.\n  Readiness    Always; validates every change that publication would introduce.\n  Bookmark     Runs when --bookmark is supplied; creates or fast-forwards that exact name.\n  Push         Runs when --bookmark is supplied; pushes only that name.\n\nDescription and bookmark updates are one local operation committed before push.\nA push failure keeps that local desired state and returns a structured partial result.\nThe push remote is git.push, otherwise the sole configured remote, otherwise origin.\nWith no bookmark, finish is a readiness-only success after applying an optional message; it creates no private \"finished\" metadata.\nWith a bookmark, do not generate or infer a name and do not infer a remote from tracking."
-    )]
+    #[command(long_about = FINISH_HELP)]
     Finish {
         change: String,
         #[arg(long)]
@@ -176,6 +324,7 @@ enum Command {
         #[arg(long)]
         full: bool,
     },
+    #[command(long_about = DIFF_HELP)]
     Diff {
         change: Option<String>,
         #[arg(long)]
@@ -183,6 +332,7 @@ enum Command {
         #[arg(long)]
         hunks: bool,
     },
+    #[command(long_about = PARTITION_HELP)]
     Partition {
         change: String,
         #[arg(long = "spec-file")]
@@ -192,6 +342,7 @@ enum Command {
         #[arg(long)]
         details: bool,
     },
+    #[command(long_about = SPLIT_HELP)]
     Split {
         change: String,
         #[arg(long)]
@@ -199,6 +350,7 @@ enum Command {
         #[arg(long = "into")]
         into: String,
     },
+    #[command(long_about = MOVE_HELP)]
     Move {
         #[arg(long)]
         from: String,
@@ -207,14 +359,17 @@ enum Command {
         #[arg(long)]
         hunks: String,
     },
+    #[command(long_about = ABSORB_HELP)]
     Absorb {
         #[arg(long = "dry-run")]
         dry_run: bool,
     },
+    #[command(long_about = REORDER_HELP)]
     Reorder {
         #[arg(long)]
         sequence: String,
     },
+    #[command(long_about = SQUASH_HELP)]
     Squash {
         change: String,
         #[arg(long = "into")]
@@ -222,13 +377,14 @@ enum Command {
         #[arg(long)]
         message: Option<String>,
     },
-    Abandon {
-        change: String,
-    },
+    #[command(long_about = ABANDON_HELP)]
+    Abandon { change: String },
+    #[command(long_about = OPERATIONS_HELP)]
     Operations {
         #[arg(long, default_value_t = 20, value_parser = parse_limit)]
         limit: usize,
     },
+    #[command(long_about = UNDO_HELP)]
     Undo {
         #[arg(long)]
         to: Option<String>,
@@ -297,6 +453,7 @@ enum BookmarkCommand {
         #[arg(long = "allow-backwards")]
         allow_backwards: bool,
     },
+    #[command(long_about = BOOKMARK_PUSH_HELP)]
     Push {
         name: String,
         #[arg(long)]
