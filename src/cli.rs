@@ -89,6 +89,7 @@ pub enum CommandInput {
         number: u64,
         repository: Option<String>,
     },
+    Skill,
     SetupSkill {
         output: String,
         force: bool,
@@ -234,6 +235,7 @@ enum Command {
         #[command(subcommand)]
         command: PrCommand,
     },
+    Skill,
     Setup {
         #[command(subcommand)]
         command: SetupCommand,
@@ -414,6 +416,7 @@ where
             Command::Pr {
                 command: PrCommand::Status { number, repository },
             } => CommandInput::PrStatus { number, repository },
+            Command::Skill => CommandInput::Skill,
             Command::Setup {
                 command: SetupCommand::Skill { output, force },
             } => CommandInput::SetupSkill { output, force },

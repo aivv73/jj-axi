@@ -24,6 +24,7 @@ pub(crate) async fn run(parsed: ParsedCli, cwd: &Path) -> ExitCode {
             argument,
             constraint,
         }),
+        ParsedCli::Command(CommandInput::Skill) => emit_skill(),
         ParsedCli::Command(command) => match execute(command, cwd).await {
             Ok(response) => emit_success(response),
             Err(error) => emit_error(error),
@@ -216,10 +217,19 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
         CommandInput::Operations { .. }
         | CommandInput::BookmarkList { .. }
         | CommandInput::PrStatus { .. }
+        | CommandInput::Skill
         | CommandInput::SetupSkill { .. } => {
             unreachable!("handled before repository synchronization")
         }
     }
+}
+
+fn emit_skill() -> ExitCode {
+    let mut stdout = std::io::stdout().lock();
+    if stdout.write_all(setup::SKILL_BYTES).is_err() {
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
 }
 
 fn emit_success(response: Response) -> ExitCode {

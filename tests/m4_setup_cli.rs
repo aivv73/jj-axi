@@ -11,6 +11,17 @@ fn run(cwd: &std::path::Path, args: &[&str]) -> std::process::Output {
 }
 
 #[test]
+fn skill_prints_exact_canonical_bytes_without_a_repository() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = run(directory.path(), &["skill"]);
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(output.stdout, include_bytes!("../skills/jj-axi/SKILL.md"));
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn setup_skill_creates_exact_canonical_bytes_and_retries_unchanged() {
     let directory = tempfile::tempdir().unwrap();
     let output_path = directory.path().join("SKILL.md");
