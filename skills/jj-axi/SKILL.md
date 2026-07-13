@@ -1,87 +1,68 @@
 ---
 name: jj-axi
-description: Use jj-axi when a Jujutsu task needs non-interactive hunk routing, multi-part partitioning, stack editing, operation-aware undo, or deterministic publication. Prefer raw jj for routine inspection and simple change creation.
+description: "Use for deterministic, editor-free Jujutsu history editing: exact hunk routing, multi-part partitioning, stack reorder, absorb, undo, and validated publication. Use raw jj for routine single-step work."
 ---
 
-# Deterministic history editing with jj-axi
+# jj-axi
 
-jj-axi is a machine-first companion to Jujutsu, not a replacement for its everyday CLI. Use raw `jj` when one ordinary, non-interactive command answers the question. Switch to jj-axi when history editing would require an editor, manual patch interpretation, or several dependent mutations.
+Use raw `jj` for ordinary `status`, `log`, `show`, `diff`, `new`, and `describe` operations.
 
-## Choose the narrowest interface
+Use jj-axi when raw Jujutsu would require an editor, manual patch interpretation, or several dependent history mutations. Use Jujutsu interfaces whenever `.jj/` exists, including colocated repositories; do not mechanically translate Git staging, stash, or branch workflows.
 
-Use raw `jj` for routine work:
+## Choose an operation
 
-```bash
-jj status
-jj log -n 20
-jj show <change>
-jj diff -r <change>
-jj new -m "implement token refresh"
-jj describe -r <change> -m "implement token refresh"
-```
+- Split selected hunks into a new change: `split`.
+- Move known hunks between known changes: `move`.
+- Split one change into multiple ordered changes: `partition`.
+- Infer destinations from mutable ancestors: `absorb`.
+- Reorder a contiguous linear stack: `reorder`.
+- Move all content into another change: `squash`.
+- Inspect or recover repository operations: `operations`, `undo`.
+- Validate or publish one exact bookmark: `finish`, `bookmark push`.
 
-Before selective squash, patch splitting, moving hunks, multi-way partitioning, stack reordering, operation recovery, or validated publication, use jj-axi. Running `jj-axi` with no arguments prints a short routing guide; `jj-axi --help` reports the installed command surface.
+Use `jj-axi --help` to confirm installed syntax. Use `jj-axi skill --full` only when detailed semantics for a secondary command are necessary.
 
-## Preserve the Jujutsu model
+## Discover exact hunks first
 
-Check for `.jj/` before choosing version-control commands. In a colocated repository, `.git/` may also exist; use Jujutsu interfaces for local history instead of Git commands.
-
-Jujutsu models work as **changes**:
-
-- The working copy is a mutable change; there is no staging step.
-- Change IDs remain stable when commits are rewritten.
-- Local bookmarks are named references, mainly useful for collaboration and publication.
-- Operations record repository-level mutations and make recovery possible.
-
-Do not translate a Git workflow mechanically. There is usually no need for `git add`, stash management, detached-HEAD handling, or a local branch per task.
-
-## Request structured inspection only when it pays off
-
-Use `jj-axi inspect` when one structured snapshot should combine the current change, working-copy diff summary, and conflict/divergence counts. Focused jj-axi reads are useful when bounded machine output or canonical selectors matter:
-
-```bash
-jj-axi inspect
-jj-axi log --limit 20 --conflicted
-jj-axi show <change>
-jj-axi diff <change> --full
-```
-
-Diff bodies are bounded by default. Request `--full` only when the complete patch is necessary. For ordinary status, log, show, or diff questions, prefer raw `jj`.
-
-## Validate and publish deterministically
-
-Use raw `jj bookmark set` for straightforward local bookmark placement. Use jj-axi when publication needs readiness validation, exact-name selection, and structured partial-failure state:
-
-```bash
-jj-axi finish <change>
-jj-axi finish <change> --bookmark feature-name
-```
-
-`finish` never invents a bookmark. A failed push may retain the local desired state and return a structured partial result; inspect that result before retrying.
-
-## Route hunks without an editor
-
-Discover canonical post-image selectors before routing nontrivial hunks:
+Before `split`, `move`, or `partition`, run:
 
 ```bash
 jj-axi diff <change> --hunks
 ```
 
-Pass the returned `path` and `lines` values unchanged:
+Copy the returned full `snapshot.commit_id`, `path`, and `lines` values exactly. Never derive selectors from patch text or approximate line numbers. Selectors do not snap to nearby content: stale, partial, duplicate, binary, or unsupported selections fail without history mutation and return bounded recovery information.
+
+Use `N-0` exactly as returned for deletion-only boundaries.
+
+## Route selected hunks
+
+Create a new change from selected hunks:
 
 ```bash
-jj-axi split <change> --hunks "src/lib.rs:12-18" --into "extract parser"
-jj-axi move --from <change> --to <change> --hunks "src/lib.rs:12-18"
+jj-axi split <change> \
+  --hunks 'src/lib.rs:12-18,tests/lib.rs:8-14' \
+  --into 'extract parser'
 ```
 
-Use `N-0` for a deletion-only boundary. Select multiple hunks with comma-separated entries. Selectors never snap to nearby content: stale or partial ranges fail and return bounded retry candidates. `skipped_paths` identifies content that declarative routing cannot safely address.
+Move selected hunks between existing changes:
 
-Partition one guarded snapshot into several ordered changes when repeated binary splits would force re-inventory of each remainder. Copy the full `snapshot.commit_id` and canonical hunks from `diff --hunks` into a strict JSON manifest:
+```bash
+jj-axi move \
+  --from <source> \
+  --to <destination> \
+  --hunks 'src/lib.rs:12-18'
+```
+
+Use `split` when the destination must be created. Use `move` when both source and destination already exist.
+
+## Partition one change into several changes
+
+Use `partition` when one source change must become multiple ordered changes. Build the manifest only from one `diff --hunks` result:
 
 ```json
 {
   "schema_version": 1,
-  "source_commit_id": "<full commit id>",
+  "source_commit_id": "<full snapshot commit id>",
   "parts": [
     {
       "description": "refactor parser",
@@ -96,118 +77,65 @@ Partition one guarded snapshot into several ordered changes when repeated binary
 }
 ```
 
-Keep the manifest outside tracked repository content or pipe it through stdin so writing the plan does not stale its source guard:
+Pipe the manifest through stdin so writing it cannot stale the source snapshot:
 
 ```bash
-cat partition.json | jj-axi partition <change> --spec-file - --dry-run
+cat partition.json | jj-axi partition <change> --spec-file - --dry-run --details
 cat partition.json | jj-axi partition <change> --spec-file -
 ```
 
-Choose `remaining_change` to preserve a separate remainder change, `working_copy` to route unfinished content into the invoking descendant working-copy change, or `require_empty` to reject any unassigned or unsupported content. Use `--details` only when the receipt must echo canonical part and remainder hunks. Otherwise rely on the manifest SHA-256, counts, realized identities, conflict status, and bounded affected-state summaries. After success, one `inspect` plus targeted `log` or `show` is normally sufficient; do not repeat binary split inventory loops.
+Inspect a detailed dry-run for multi-part partition unless every assignment is mechanically obvious. Choose one explicit remainder destination:
 
-Preview or apply automatic absorption:
+- `working_copy` for unfinished content;
+- `remaining_change` for a separate remainder change;
+- `require_empty` to reject any unassigned or unsupported content.
+
+## Edit a stack without an editor
+
+Preview absorption before applying it:
 
 ```bash
 jj-axi absorb --dry-run
 jj-axi absorb
 ```
 
-Reorder a linear stack by listing every selected change from oldest to newest:
+Reorder a contiguous linear selection from oldest to newest:
 
 ```bash
-jj-axi reorder --sequence "<oldest>,<middle>,<newest>"
+jj-axi reorder --sequence '<oldest>,<middle>,<newest>'
 ```
 
-History editing rejects unsupported shapes and content rather than guessing.
+Move all content from one change into another; this is not selective hunk routing:
 
-## Inspect and undo operations
+```bash
+jj-axi squash <from> --into <to>
+```
 
-Read the bounded operation graph without mutating it:
+History-shape errors and rewrite conflicts are reported explicitly rather than resolved by guessing.
+
+## Recover or publish
+
+Inspect operation history or undo the latest user-visible repository mutation:
 
 ```bash
 jj-axi operations --limit 20
-```
-
-Undo the latest user-visible repository mutation while retaining newer synchronized working-copy content:
-
-```bash
 jj-axi undo
-```
-
-Restore an explicit reachable operation:
-
-```bash
 jj-axi undo --to <operation-id>
 ```
 
-Bare undo skips synchronization-only and prior undo operations. Divergent operation history requires an explicit target. Undo is local and does not reverse pushes or other external effects.
-
-## Manage local bookmarks and publication
-
-Inspect cached local and tracked-remote collaboration state:
+`finish <change>` validates local readiness. Adding `--bookmark` also publishes that exact bookmark:
 
 ```bash
-jj-axi bookmark list
-jj-axi bookmark list --name feature-name
-jj-axi bookmark list --limit 50 --after previous-name
+jj-axi finish <change>
+jj-axi finish <change> --bookmark feature-name
 ```
 
-Listing never fetches. Ahead/behind values reflect locally recorded tracking state.
+`finish` never invents a bookmark name. Local bookmark placement alone does not publish.
 
-Create or safely move a local bookmark:
+## Safety rules
 
-```bash
-jj-axi bookmark set feature-name --to <change>
-```
-
-Backward or sideways movement requires explicit intent:
-
-```bash
-jj-axi bookmark set feature-name --to <change> --allow-backwards
-```
-
-Publish only one existing local bookmark:
-
-```bash
-jj-axi bookmark push feature-name
-jj-axi bookmark push feature-name --remote origin
-```
-
-Local placement does not imply publication. Push applies readiness checks and lease protection and is retry-safe when the remote already matches.
-
-## Inspect GitHub pull-request readiness
-
-Query one explicit pull request:
-
-```bash
-jj-axi pr status 42 --repo owner/repository
-jj-axi pr status 42 --repo github.example.com/owner/repository
-```
-
-When configured remotes identify one GitHub repository, `--repo` may be omitted. The response normalizes checks, reviews, mergeability, merge readiness, and all blocking reasons. This command requires an authenticated `gh` executable.
-
-## Continue using raw Jujutsu
-
-Raw `jj` remains the default for routine single-step work and for capabilities that jj-axi does not expose:
-
-```bash
-jj git init --colocate       # initialize an existing Git checkout
-jj git fetch                 # refresh remote-tracking state
-jj workspace add <path>      # create another workspace
-jj resolve                   # resolve conflicted files
-jj status                    # inspect ordinary working-copy state
-jj new -m "description"      # create a straightforward child change
-jj describe -m "description" # describe the current change
-```
-
-Raw commands may produce human-oriented output or open interactive tools. Supply non-interactive arguments where available. Do not substitute raw interactive `jj split` when declarative jj-axi hunk routing can express the task.
-
-## Safe operating rules
-
-- Inspect with raw `jj` or structured jj-axi output before mutating when the current change or target is uncertain.
-- Use explicit change IDs, bookmark names, operation IDs, remotes, and PR numbers.
-- Treat structured partial results as changed state, not ordinary failures.
-- Do not parse human terminal prose when a jj-axi schema exists.
-- Do not create local bookmarks merely to separate unfinished tasks; changes already provide identity.
-- Do not assume undo reverses remote effects.
-- Re-run `jj-axi --help` after upgrading before relying on newly documented commands.
+- Treat a structured partial result as changed state, not an ordinary failure; inspect it before retrying.
+- Use explicit change IDs, hunk selectors, bookmark names, operation IDs, and remotes.
+- Do not parse human terminal prose when a jj-axi schema answers the same question.
+- Do not use raw interactive `jj split` when exact jj-axi routing can express the task.
+- Undo is local and does not reverse pushes or other external effects.

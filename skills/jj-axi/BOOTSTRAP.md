@@ -21,4 +21,4 @@ Typical selective-editing flow:
 3. Pass them to `jj-axi split`, `move`, or a guarded `partition` manifest.
 4. Inspect the structured result before continuing.
 
-Run `jj-axi skill` for the full command guide, or `jj-axi --help` for the installed command surface.
+Run `jj-axi skill` for compact operational instructions, `jj-axi skill --full` for the detailed agent reference, or `jj-axi --help` for installed command syntax.

@@ -91,6 +91,7 @@ pub enum CommandInput {
     },
     Bootstrap,
     Skill {
+        full: bool,
         output: Option<String>,
         force: bool,
     },
@@ -242,6 +243,9 @@ enum Command {
     },
     /// Print or install the full canonical agent skill.
     Skill {
+        /// Print the detailed agent reference instead of the operational skill.
+        #[arg(long, conflicts_with = "output")]
+        full: bool,
         /// Install the skill atomically at this path instead of printing it.
         #[arg(long)]
         output: Option<String>,
@@ -430,10 +434,19 @@ where
             Command::Pr {
                 command: PrCommand::Status { number, repository },
             } => CommandInput::PrStatus { number, repository },
-            Command::Skill { output, force } => CommandInput::Skill { output, force },
+            Command::Skill {
+                full,
+                output,
+                force,
+            } => CommandInput::Skill {
+                full,
+                output,
+                force,
+            },
             Command::Setup {
                 command: SetupCommand::Skill { output, force },
             } => CommandInput::Skill {
+                full: false,
                 output: Some(output),
                 force,
             },

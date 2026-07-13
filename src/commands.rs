@@ -26,9 +26,15 @@ pub(crate) async fn run(parsed: ParsedCli, cwd: &Path) -> ExitCode {
         }),
         ParsedCli::Command(CommandInput::Bootstrap) => emit_bytes(setup::BOOTSTRAP_BYTES),
         ParsedCli::Command(CommandInput::Skill {
+            full: false,
             output: None,
             force: false,
         }) => emit_bytes(setup::SKILL_BYTES),
+        ParsedCli::Command(CommandInput::Skill {
+            full: true,
+            output: None,
+            force: false,
+        }) => emit_bytes(setup::AGENT_REFERENCE_BYTES),
         ParsedCli::Command(command) => match execute(command, cwd).await {
             Ok(response) => emit_success(response),
             Err(error) => emit_error(error),
@@ -38,6 +44,7 @@ pub(crate) async fn run(parsed: ParsedCli, cwd: &Path) -> ExitCode {
 
 async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError> {
     if let CommandInput::Skill {
+        full: false,
         output: Some(output),
         force,
     } = &command

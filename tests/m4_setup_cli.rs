@@ -18,6 +18,11 @@ fn skill_prints_exact_canonical_bytes_without_a_repository() {
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
     assert_eq!(output.stdout, include_bytes!("../skills/jj-axi/SKILL.md"));
+
+    let full = run(directory.path(), &["skill", "--full"]);
+    assert!(full.status.success());
+    assert!(full.stderr.is_empty());
+    assert_eq!(full.stdout, include_bytes!("../docs/agent-reference.md"));
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
 
     let invalid = run(directory.path(), &["skill", "--force"]);
@@ -27,6 +32,12 @@ fn skill_prints_exact_canonical_bytes_without_a_repository() {
             .unwrap()
             .contains("code: invalid_argument")
     );
+
+    let conflicting = run(
+        directory.path(),
+        &["skill", "--full", "--output", "SKILL.md"],
+    );
+    assert!(!conflicting.status.success());
 }
 
 #[test]

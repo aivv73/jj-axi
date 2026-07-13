@@ -53,8 +53,12 @@ The short instruction artifact that routes an agent between routine Jujutsu work
 _Avoid_: Home view, mini skill
 
 **Canonical skill document**:
-The versioned, repository-independent `jj-axi` instruction artifact that fully explains deterministic history workflows.
+The compact, versioned, repository-independent instruction artifact that lets an agent select and execute the primary deterministic history workflows without loading the complete command reference.
 _Avoid_: Skill template, generated prompt
+
+**Agent reference document**:
+The detailed, opt-in instruction artifact for secondary commands and complete safety semantics that do not belong in the canonical skill's routine context budget.
+_Avoid_: Full skill, extended prompt
 
 **Routine Jujutsu workflow**:
 A direct, non-interactive `jj` workflow for ordinary inspection, simple change creation, or another task that one raw command expresses clearly.

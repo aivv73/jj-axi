@@ -22,7 +22,7 @@ jj-axi targets that narrow interface:
 
 A compact fallback instruction is usually enough to introduce the tool:
 
-> Use `jj` for ordinary repository inspection and simple change creation. Before interactive or multi-step history editing—such as selective squash, patch splitting, moving hunks between changes, or rebasing a stack—run `jj-axi` and follow its instructions.
+> Use `jj` for ordinary repository inspection and simple change creation. Before interactive or multi-step history editing—such as full-content squash, patch splitting, moving hunks between changes, or rebasing a stack—run `jj-axi` and follow its instructions.
 
 ## Example
 
@@ -141,8 +141,9 @@ Routine creation and description can stay on raw `jj`; compatibility and composi
 ### Agent integration
 
 - no arguments — print the short bootstrap guide;
-- `skill` — print the canonical agent skill to stdout;
-- `skill --output <path> [--force]` — install it atomically with conflict protection;
+- `skill` — print the compact operational skill to stdout;
+- `skill --full` — print the detailed agent reference;
+- `skill --output <path> [--force]` — install the operational skill atomically with conflict protection;
 - `setup skill` — compatibility alias for protected installation.
 
 Run `jj-axi --help` or `jj-axi <command> --help` for the installed command contract.
@@ -168,7 +169,7 @@ cargo build --release --locked
 
 ## Agent skill
 
-Install the canonical skill with the Vercel Skills CLI:
+Install the compact operational skill with the Vercel Skills CLI:
 
 ```bash
 npx skills add aivv73/jj-axi --skill jj-axi
@@ -181,7 +182,7 @@ mkdir -p .agents/skills/jj-axi
 jj-axi skill --output .agents/skills/jj-axi/SKILL.md
 ```
 
-For shell composition, `jj-axi skill` prints the same exact bytes to stdout. The older `jj-axi setup skill --output ...` spelling remains a compatibility alias. The embedded source is [`skills/jj-axi/SKILL.md`](./skills/jj-axi/SKILL.md); installing it does not install the jj-axi binary itself.
+For shell composition, `jj-axi skill` prints the same exact bytes to stdout. Use `jj-axi skill --full` only when the detailed [`agent reference`](./docs/agent-reference.md) is needed. The older `jj-axi setup skill --output ...` spelling remains a compatibility alias. Installing the skill does not install the jj-axi binary itself.
 
 ## Compatibility and safety
 
@@ -230,4 +231,5 @@ jj-axi is informed by the [AXI](https://github.com/kunchenguid/axi) principles, 
 - [Domain glossary](./CONTEXT.md)
 - [AXI applicability audit](./docs/axi-applicability.md)
 - [Architecture decisions](./docs/adr/)
-- [Canonical agent skill](./skills/jj-axi/SKILL.md)
+- [Compact operational skill](./skills/jj-axi/SKILL.md)
+- [Detailed agent reference](./docs/agent-reference.md)

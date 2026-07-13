@@ -34,7 +34,12 @@ fn no_arguments_prints_the_short_bootstrap_without_a_repository() {
     assert!(
         include_bytes!("../skills/jj-axi/BOOTSTRAP.md").len() * 3
             < include_bytes!("../skills/jj-axi/SKILL.md").len(),
-        "bootstrap must stay substantially smaller than the full skill"
+        "bootstrap must stay substantially smaller than the operational skill"
+    );
+    assert!(
+        include_bytes!("../skills/jj-axi/SKILL.md").len() * 3
+            < include_bytes!("../docs/agent-reference.md").len() * 2,
+        "operational skill must stay substantially smaller than the agent reference"
     );
 }
 

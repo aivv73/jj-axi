@@ -9,6 +9,7 @@ use crate::model::{SetupSkillAction, SetupSkillData};
 
 pub(crate) const BOOTSTRAP_BYTES: &[u8] = include_bytes!("../skills/jj-axi/BOOTSTRAP.md");
 pub(crate) const SKILL_BYTES: &[u8] = include_bytes!("../skills/jj-axi/SKILL.md");
+pub(crate) const AGENT_REFERENCE_BYTES: &[u8] = include_bytes!("../docs/agent-reference.md");
 
 pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, AppError> {
     let requested = Path::new(output);
