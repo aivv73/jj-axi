@@ -101,7 +101,7 @@ Create a JSON manifest:
 Preview and apply it through stdin so creating the plan cannot stale the guarded source:
 
 ```bash
-cat partition.json | jj-axi partition <change> --spec-file - --dry-run
+cat partition.json | jj-axi partition <change> --spec-file - --dry-run --details
 cat partition.json | jj-axi partition <change> --spec-file -
 ```
 
@@ -109,7 +109,7 @@ Remainder policies:
 
 - `remaining_change` — create a separate remainder change;
 - `working_copy` — route unfinished content into the invoking workspace change;
-- `require_empty` — reject the plan unless every source change is assigned.
+- `require_empty` — reject the plan unless every source hunk is assigned.
 
 Partition applies all parts, descendant rewrites, bookmarks, and workspace updates as one operation and one undo boundary. Rewrite conflicts are successful structured state rather than ambiguous command failure.
 
@@ -167,7 +167,16 @@ cargo build --release --locked
 ./target/release/jj-axi --version
 ```
 
-## Agent skill
+## Agent instructions
+
+jj-axi separates discovery, routine operation, and detailed reference material so agents only load the context they need:
+
+| Invocation | Purpose |
+| --- | --- |
+| `jj-axi` | Short routing guide: when to use raw `jj` or jj-axi |
+| `jj-axi skill` | Compact operational instructions for primary history workflows |
+| `jj-axi skill --full` | Detailed semantics for secondary commands and edge cases |
+| `jj-axi --help` | Syntax supported by the installed binary |
 
 Install the compact operational skill with the Vercel Skills CLI:
 
@@ -215,7 +224,7 @@ A Codex `gpt-5.6-sol` low-effort, `k=3` calibration across five version-control 
 | plain Git | 15/15 | 50.1s | 20.1 |
 | GitButler + skill | 14/15 | 71.5s | 11.0 |
 | raw Jujutsu + external skill | 14/15 | 98.8s | 15.3 |
-| jj-axi + canonical skill | **15/15** | **46.3s** | **9.9** |
+| jj-axi + then-current canonical skill | **15/15** | **46.3s** | **9.9** |
 
 In the calibrated split task, jj-axi completed 3/3 runs with one mutation and 9.7 task VC commands on average, versus Git's 28.0 commands. These are small-sample pilot results, not a general ranking or statistical proof. They predate the hybrid companion positioning and should not be read as evidence for that routing strategy; a dedicated raw-jj-plus-jj-axi benchmark is still needed. Correctness remains the gate, and benchmark work does not define product semantics.
 
