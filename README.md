@@ -4,7 +4,7 @@ An agent-native command-line interface for [Jujutsu](https://jj-vcs.github.io/jj
 
 jj-axi turns common version-control reasoning tasks into deterministic, non-interactive commands with compact TOON responses. It uses `jj-lib` directly while preserving ordinary Jujutsu repository compatibility.
 
-> **Status:** Experimental · **Language:** Rust · **License:** MIT OR Apache-2.0
+> **Status:** Experimental · **Language:** Rust · **License:** MIT
 
 ## Why
 
