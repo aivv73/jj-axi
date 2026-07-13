@@ -185,7 +185,7 @@ For shell composition, `jj-axi skill` prints the same exact bytes to stdout. The
 
 ## Compatibility and safety
 
-The v0.1.0 compatibility contract is intentionally narrow:
+The v0.2.0 compatibility contract is intentionally narrow:
 
 | Component | Verified version or platform |
 | --- | --- |
@@ -194,7 +194,7 @@ The v0.1.0 compatibility contract is intentionally narrow:
 | Linux | Ubuntu 24.04, x86-64; release binary targets static musl |
 | macOS | macOS 15 on x86-64 and Apple Silicon |
 
-Other Jujutsu versions, operating systems, and architectures may work but are not part of the v0.1.0 compatibility contract. The installed `jj` version should match the embedded libraries to avoid repository-format or working-copy synchronization differences.
+Other Jujutsu versions, operating systems, and architectures may work but are not part of the v0.2.0 compatibility contract. The installed `jj` version should match the embedded libraries to avoid repository-format or working-copy synchronization differences.
 
 - jj-axi operates on standard Jujutsu repositories through `jj-lib`.
 - History selectors use exact post-image hunk boundaries; stale or partial ranges fail with bounded canonical recovery candidates.

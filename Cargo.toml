@@ -1,9 +1,9 @@
 [package]
 name = "jj-axi"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
-description = "Agent-native command-line interface for Jujutsu"
+description = "Machine-first Jujutsu companion for non-trivial history editing"
 license = "MIT"
 repository = "https://github.com/aivv73/jj-axi"
 homepage = "https://github.com/aivv73/jj-axi"
