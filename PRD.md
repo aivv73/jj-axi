@@ -3,7 +3,7 @@
 **Status:** Draft
 **Author:** Данила
 **Language:** Rust
-**License:** MIT / Apache-2.0
+**License:** MIT
 
 See [README.md](./README.md) for vision, thesis, and design principles. This document is the working spec: command contracts, open design questions, licensing position, and milestones.
 
@@ -80,7 +80,7 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 
 ## 3. Licensing position
 
-jj-axi is written from scratch under MIT/Apache-2.0. It draws on:
+jj-axi is written from scratch under the MIT License. It draws on:
 
 - **AXI principles spec** (MIT, kunchenguid/axi) — design methodology, not code; freely applicable.
 - **GitButler's documented AI-agent UX concepts** (docs.gitbutler.com/ai-agents) — ideas and workflow concepts only. No GitButler source code is used or derived from. GitButler's code is under FSL-1.1-MIT, whose Competing Use clause prohibits building a "same or substantially similar functionality" product *from their code*; jj-axi avoids this by not touching their codebase and not reproducing their documentation text verbatim.
