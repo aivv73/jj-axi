@@ -100,7 +100,9 @@ cat partition.json | jj-axi partition <change> --spec-file - --dry-run
 cat partition.json | jj-axi partition <change> --spec-file -
 ```
 
-Choose `remaining_change` to preserve a separate remainder change, `working_copy` to route unfinished content into the invoking descendant working-copy change, or `require_empty` to reject any unassigned or unsupported content. For multi-part partition, inspect a `--details` dry-run unless every assignment is mechanically obvious. The compact apply receipt reports the manifest SHA-256, counts, realized identities, conflict status, and bounded affected-state summaries. After success, one `inspect` plus targeted `log` or `show` is normally sufficient; do not repeat binary split inventory loops.
+Choose `remaining_change` to preserve a separate remainder change, `working_copy` to route unfinished content into the invoking descendant working-copy change, or `require_empty` to reject any unassigned or unsupported content. For multi-part partition, inspect a `--details` dry-run unless every assignment is mechanically obvious. The compact apply receipt reports the manifest SHA-256, counts, realized identities, conflict status, and bounded affected-state summaries; rewritten descendants are matched by their pre-rewrite commit IDs so divergent commits sharing a change ID cannot make the receipt ambiguous. After success, one `inspect` plus targeted `log` or `show` is normally sufficient; do not repeat binary split inventory loops.
+
+Mutation state is committed before colocated-Git synchronization and working-copy update. An `operation_incomplete` result therefore means repository state changed; its `failed_step` is either `colocated_git_synchronization` or `working_copy_update`. Inspect Jujutsu and, for the former, Git state before deciding whether to retry.
 
 Preview or apply automatic absorption:
 
@@ -195,7 +197,7 @@ jj-axi pr status 42 --repo owner/repository
 jj-axi pr status 42 --repo github.example.com/owner/repository
 ```
 
-When configured remotes identify one GitHub repository, `--repo` may be omitted. The response normalizes checks, reviews, mergeability, merge readiness, and all blocking reasons. This command requires an authenticated `gh` executable.
+When configured remotes identify one GitHub repository, `--repo` may be omitted. Explicit repository identities are validated before invoking `gh`. The response normalizes checks, reviews, mergeability, merge readiness, and all blocking reasons; a missing pull request is reported as not found, while pagination that changes the PR head or repeats a cursor is rejected as an invalid snapshot. This command requires an authenticated `gh` executable and runs it with prompts and stdin disabled.
 
 ## Continue using raw Jujutsu
 
