@@ -16,7 +16,7 @@ fn fake_gh(json: &str) -> TempDir {
     fs::write(
         &script,
         format!(
-            "#!/bin/sh\n[ \"$GH_PROMPT_DISABLED\" = 1 ] || exit 91\n/bin/cat '{}'\n",
+            "#!/bin/sh\n[ \"$GH_PROMPT_DISABLED\" = 1 ] || exit 91\nwhile IFS= read -r line || [ -n \"$line\" ]; do printf '%s\\n' \"$line\"; done < '{}'\n",
             response.display()
         ),
     )
@@ -96,6 +96,30 @@ fn pr_status_normalizes_auth_failures_without_leaking_stderr() {
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("code: github_auth_required"));
     assert!(!text.contains("secret-value"));
+}
+
+#[test]
+fn pr_status_does_not_infer_a_lookalike_github_host() {
+    let repo = repository();
+    assert!(
+        common::run_jj(
+            repo.path(),
+            &[
+                "git",
+                "remote",
+                "add",
+                "origin",
+                "https://notgithub.attacker.invalid/acme/project.git",
+            ],
+        )
+        .status
+        .success()
+    );
+    let gh = fake_gh(READY_JSON);
+    let output = run_with_gh(repo.path(), gh.path(), &["pr", "status", "7"]);
+    assert!(!output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("code: github_repository_not_found"));
 }
 
 #[test]

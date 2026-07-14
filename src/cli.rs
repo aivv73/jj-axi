@@ -16,23 +16,25 @@ Example:
 
 const SPLIT_HELP: &str = r#"Route exact selected hunks from one change into a new described change.
 
-First run `jj-axi diff <change> --hunks`, then copy returned path/lines selectors
-unchanged into --hunks. Separate multiple selectors with commas. Use N-0 exactly
-as returned for deletion-only boundaries. Stale, partial, duplicate, binary, or
-unsupported selections fail before history mutation.
+First run `jj-axi diff <change> --hunks`, then copy the full snapshot commit ID
+into --source-commit-id and returned path/lines selectors unchanged into --hunks.
+Separate multiple selectors with commas. Use N-0 exactly as returned for
+deletion-only boundaries. Stale, partial, duplicate, binary, or unsupported
+selections fail before history mutation.
 
 Example:
-  jj-axi split @ --hunks 'src/lib.rs:12-18,tests/lib.rs:8-14' --into 'extract parser'"#;
+  jj-axi split @ --source-commit-id <full-id> --hunks 'src/lib.rs:12-18,tests/lib.rs:8-14' --into 'extract parser'"#;
 
 const MOVE_HELP: &str = r#"Move exact selected hunks between two existing changes.
 
-First run `jj-axi diff <source> --hunks`, then copy returned path/lines selectors
-unchanged into --hunks. Use move only when both source and destination already
-exist; use split to create a new destination. Selectors never snap, and invalid
-or stale selections fail before history mutation.
+First run `jj-axi diff <source> --hunks`, then copy the full snapshot commit ID
+into --source-commit-id and returned path/lines selectors unchanged into --hunks.
+Use move only when both source and destination already exist; use split to create
+a new destination. Selectors never snap, and invalid or stale selections fail
+before history mutation.
 
 Example:
-  jj-axi move --from <source> --to <destination> --hunks 'src/lib.rs:12-18'"#;
+  jj-axi move --from <source> --to <destination> --source-commit-id <full-id> --hunks 'src/lib.rs:12-18'"#;
 
 const PARTITION_HELP: &str = r#"Atomically split one source change into multiple ordered changes.
 
@@ -201,12 +203,14 @@ pub enum CommandInput {
     },
     Split {
         change: String,
+        source_commit_id: String,
         hunks: Vec<HunkSpec>,
         into: String,
     },
     Move {
         from: String,
         to: String,
+        source_commit_id: String,
         hunks: Vec<HunkSpec>,
     },
     Absorb {
@@ -345,6 +349,8 @@ enum Command {
     #[command(long_about = SPLIT_HELP)]
     Split {
         change: String,
+        #[arg(long = "source-commit-id")]
+        source_commit_id: String,
         #[arg(long)]
         hunks: String,
         #[arg(long = "into")]
@@ -356,6 +362,8 @@ enum Command {
         from: String,
         #[arg(long)]
         to: String,
+        #[arg(long = "source-commit-id")]
+        source_commit_id: String,
         #[arg(long)]
         hunks: String,
     },
@@ -516,11 +524,13 @@ where
             },
             Command::Split {
                 change,
+                source_commit_id,
                 hunks,
                 into,
             } => match parse_hunk_specs(&hunks) {
                 Ok(hunks) => CommandInput::Split {
                     change,
+                    source_commit_id,
                     hunks,
                     into,
                 },
@@ -531,8 +541,18 @@ where
                     };
                 }
             },
-            Command::Move { from, to, hunks } => match parse_hunk_specs(&hunks) {
-                Ok(hunks) => CommandInput::Move { from, to, hunks },
+            Command::Move {
+                from,
+                to,
+                source_commit_id,
+                hunks,
+            } => match parse_hunk_specs(&hunks) {
+                Ok(hunks) => CommandInput::Move {
+                    from,
+                    to,
+                    source_commit_id,
+                    hunks,
+                },
                 Err(()) => {
                     return ParsedCli::InvalidArgument {
                         argument: "hunks",
@@ -825,6 +845,8 @@ mod tests {
                 "jj-axi",
                 "split",
                 "@",
+                "--source-commit-id",
+                "abcdef",
                 "--hunks",
                 r"dir/a\,b\:c.txt:2-4,deleted.txt:8-0",
                 "--into",
@@ -832,6 +854,7 @@ mod tests {
             ]),
             CommandInput::Split {
                 change: "@".to_owned(),
+                source_commit_id: "abcdef".to_owned(),
                 hunks: vec![
                     HunkSpec {
                         path: "dir/a,b:c.txt".to_owned(),
@@ -857,12 +880,15 @@ mod tests {
                 "left",
                 "--to",
                 "right",
+                "--source-commit-id",
+                "abcdef",
                 "--hunks",
                 "file.txt:1",
             ]),
             CommandInput::Move {
                 from: "left".to_owned(),
                 to: "right".to_owned(),
+                source_commit_id: "abcdef".to_owned(),
                 hunks: vec![HunkSpec {
                     path: "file.txt".to_owned(),
                     lines: HunkRange::Lines { start: 1, end: 1 },
@@ -888,6 +914,8 @@ mod tests {
                 "jj-axi",
                 "split",
                 "@",
+                "--source-commit-id",
+                "abcdef",
                 "--hunks",
                 "file.txt:0",
                 "--into",

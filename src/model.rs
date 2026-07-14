@@ -16,6 +16,7 @@ pub struct DiffStat {
     pub changed_files: u64,
     pub added_lines: u64,
     pub removed_lines: u64,
+    pub skipped_files: u64,
 }
 
 impl DiffStat {
@@ -24,6 +25,7 @@ impl DiffStat {
             ("changed_files", ToonValue::UInt(self.changed_files)),
             ("added_lines", ToonValue::UInt(self.added_lines)),
             ("removed_lines", ToonValue::UInt(self.removed_lines)),
+            ("skipped_files", ToonValue::UInt(self.skipped_files)),
         ])
     }
 }
@@ -277,7 +279,7 @@ pub struct Truncation {
     pub truncated: bool,
     pub limit_bytes: Option<u64>,
     pub returned_bytes: u64,
-    pub omitted_bytes: u64,
+    pub omitted_bytes: Option<u64>,
 }
 
 impl Truncation {
@@ -289,7 +291,10 @@ impl Truncation {
                 self.limit_bytes.map_or(ToonValue::Null, ToonValue::UInt),
             ),
             ("returned_bytes", ToonValue::UInt(self.returned_bytes)),
-            ("omitted_bytes", ToonValue::UInt(self.omitted_bytes)),
+            (
+                "omitted_bytes",
+                self.omitted_bytes.map_or(ToonValue::Null, ToonValue::UInt),
+            ),
         ])
     }
 }

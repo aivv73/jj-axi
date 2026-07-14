@@ -12,9 +12,13 @@ const USER_EMAIL: &str = "jj-axi@example.test";
 
 pub fn repository() -> TempDir {
     let directory = tempfile::tempdir().expect("create fixture directory");
+    let init_config = directory.path().join("jj-axi-init-config.toml");
+    let config_contents = format!("user.name = '{USER_NAME}'\nuser.email = '{USER_EMAIL}'\n");
+    fs::write(&init_config, &config_contents).expect("write jj init config");
     let output = Command::new("jj")
         .args(["git", "init", "."])
         .current_dir(directory.path())
+        .env("JJ_CONFIG", &init_config)
         .env("JJ_USER", USER_NAME)
         .env("JJ_EMAIL", USER_EMAIL)
         .output()
@@ -25,11 +29,8 @@ pub fn repository() -> TempDir {
         String::from_utf8_lossy(&output.stderr)
     );
     let config = directory.path().join(".jj").join("jj-axi-test-config.toml");
-    fs::write(
-        config,
-        format!("user.name = '{USER_NAME}'\nuser.email = '{USER_EMAIL}'\n"),
-    )
-    .expect("write jj config");
+    fs::write(config, config_contents).expect("write jj config");
+    fs::remove_file(init_config).expect("remove jj init config");
     directory
 }
 
@@ -88,9 +89,11 @@ pub fn successful_output(directory: &Path, args: &[&str]) -> String {
 }
 
 pub fn run_jj(directory: &Path, args: &[&str]) -> Output {
+    let config = directory.join(".jj").join("jj-axi-test-config.toml");
     Command::new("jj")
         .args(args)
         .current_dir(directory)
+        .env("JJ_CONFIG", config)
         .env("JJ_USER", USER_NAME)
         .env("JJ_EMAIL", USER_EMAIL)
         .output()
@@ -114,7 +117,7 @@ pub fn assert_error(output: Output, code: &str) -> String {
 }
 
 pub fn jj_template(directory: &Path, revision: &str, template: &str) -> String {
-    let output = run_jj(directory, &["show", revision, "-T", template]);
+    let output = run_jj(directory, &["show", revision, "--no-patch", "-T", template]);
     assert!(
         output.status.success(),
         "jj show {:?} failed: {}",

@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use chrono::Local;
-use futures::{StreamExt as _, TryStreamExt as _};
+use futures::{AsyncReadExt as _, StreamExt as _, TryStreamExt as _};
 use jj_cli::cli_util::{load_fileset_aliases, load_revset_aliases, update_working_copy};
 use jj_cli::config::{ConfigEnv, config_from_environment, default_config_layers};
 use jj_cli::description_util::join_message_paragraphs;
@@ -79,6 +79,8 @@ use crate::partition::{
 };
 
 const DEFAULT_PATCH_LIMIT_BYTES: u64 = 16 * 1024;
+const DEFAULT_FILE_READ_LIMIT_BYTES: usize = 1024 * 1024;
+const DEFAULT_TOTAL_READ_LIMIT_BYTES: usize = 8 * 1024 * 1024;
 const AXI_UNDO_PREFIX: &str = "jj-axi undo: restore to operation ";
 
 fn is_push_operation(operation: &jj_lib::operation::Operation) -> bool {
@@ -191,10 +193,10 @@ impl JjBridge {
         })?;
         let mut urls = Vec::new();
         for name in git_repo.remote_names() {
-            if let Some(Ok(remote)) = git_repo.try_find_remote(name.as_ref()) {
-                if let Some(url) = remote.url(gix::remote::Direction::Fetch) {
-                    urls.push(url.to_bstring().to_string());
-                }
+            if let Some(Ok(remote)) = git_repo.try_find_remote(name.as_ref())
+                && let Some(url) = remote.url(gix::remote::Direction::Fetch)
+            {
+                urls.push(url.to_bstring().to_string());
             }
         }
         urls.sort();
@@ -464,11 +466,10 @@ impl JjBridge {
             let target_view = target.view().await.map_err(|_| AppError::BackendFailure {
                 operation: "read_operations",
             })?;
-            if target_view
+            if !target_view
                 .store_view()
                 .wc_commit_ids
-                .get(self.workspace.workspace_name())
-                .is_none()
+                .contains_key(self.workspace.workspace_name())
             {
                 return Err(AppError::OperationTargetUnsafe {
                     operation_id: target.id().hex(),
@@ -1509,15 +1510,17 @@ impl JjBridge {
     pub(crate) async fn split_change(
         &mut self,
         change: &str,
+        source_commit_id: &str,
         hunks: &[HunkSpec],
         description: &str,
     ) -> Result<SplitData, AppError> {
         let target = self.resolve_one(change).await?;
+        self.ensure_source_commit(&target, source_commit_id)?;
         let selected_change_id = target.change_id().clone();
         let loaded = LoadedManifest {
             manifest: PartitionManifest {
                 schema_version: 1,
-                source_commit_id: target.id().to_string(),
+                source_commit_id: source_commit_id.to_owned(),
                 parts: vec![PartitionPart {
                     description: description.to_owned(),
                     hunks: hunks
@@ -1555,9 +1558,11 @@ impl JjBridge {
         &mut self,
         from: &str,
         to: &str,
+        source_commit_id: &str,
         hunks: &[HunkSpec],
     ) -> Result<MoveData, AppError> {
         let source = self.resolve_one(from).await?;
+        self.ensure_source_commit(&source, source_commit_id)?;
         let destination = self.resolve_one(to).await?;
         if source.id() == destination.id() || source.change_id() == destination.change_id() {
             return Err(AppError::InvalidHistoryShape {
@@ -2162,6 +2167,22 @@ impl JjBridge {
         })
     }
 
+    fn ensure_source_commit(
+        &self,
+        source: &Commit,
+        expected_commit_id: &str,
+    ) -> Result<(), AppError> {
+        let current_commit_id = source.id().to_string();
+        if expected_commit_id != current_commit_id {
+            return Err(AppError::StalePartitionSource {
+                change_id: source.change_id().to_string(),
+                expected_commit_id: expected_commit_id.to_owned(),
+                current_commit_id,
+            });
+        }
+        Ok(())
+    }
+
     async fn select_hunks(
         &self,
         commit: &Commit,
@@ -2243,11 +2264,11 @@ impl JjBridge {
             }
 
             let before_content = self
-                .materialize_content(before_value, &path, parent_tree.labels())
+                .materialize_content(before_value, &path, parent_tree.labels(), &mut None)
                 .await
                 .map_err(|_| AppError::BackendFailure { operation })?;
             let after_content = self
-                .materialize_content(after_value, &path, commit.tree().labels())
+                .materialize_content(after_value, &path, commit.tree().labels(), &mut None)
                 .await
                 .map_err(|_| AppError::BackendFailure { operation })?;
             let Some(before_text) = before_content.text() else {
@@ -2456,11 +2477,11 @@ impl JjBridge {
                 continue;
             }
             let before_content = self
-                .materialize_content(before_value, &path, before.labels())
+                .materialize_content(before_value, &path, before.labels(), &mut None)
                 .await
                 .map_err(|_| AppError::BackendFailure { operation })?;
             let after_content = self
-                .materialize_content(after_value, &path, after.labels())
+                .materialize_content(after_value, &path, after.labels(), &mut None)
                 .await
                 .map_err(|_| AppError::BackendFailure { operation })?;
             let (Some(before_text), Some(after_text)) =
@@ -3439,8 +3460,11 @@ impl JjBridge {
             changed_files: 0,
             added_lines: 0,
             removed_lines: 0,
+            skipped_files: 0,
         };
-        let mut sections = Vec::new();
+        let mut read_budget = (!full).then_some(DEFAULT_TOTAL_READ_LIMIT_BYTES);
+        let mut patch_body = String::new();
+        let mut patch_truncated = false;
 
         while let Some(TreeDiffEntry { path, values }) = stream.next().await {
             let JjDiff {
@@ -3450,26 +3474,40 @@ impl JjBridge {
                 operation: "read_tree_diff",
             })?;
             let before_content = self
-                .materialize_content(before_value, &path, before.labels())
+                .materialize_content(before_value, &path, before.labels(), &mut read_budget)
                 .await?;
             let after_content = self
-                .materialize_content(after_value, &path, after.labels())
+                .materialize_content(after_value, &path, after.labels(), &mut read_budget)
                 .await?;
             stat.changed_files = stat.changed_files.saturating_add(1);
 
-            if let (Some(before_text), Some(after_text)) =
+            if before_content.is_omitted() || after_content.is_omitted() {
+                stat.skipped_files = stat.skipped_files.saturating_add(1);
+            } else if let (Some(before_text), Some(after_text)) =
                 (before_content.text(), after_content.text())
             {
                 let (added, removed) = line_changes(before_text, after_text);
                 stat.added_lines = stat.added_lines.saturating_add(added);
                 stat.removed_lines = stat.removed_lines.saturating_add(removed);
             }
-            if include_patch {
-                sections.push(render_file_patch(&path, &before_content, &after_content));
+            if include_patch && !patch_truncated {
+                let content_omitted = before_content.is_omitted() || after_content.is_omitted();
+                let section = render_file_patch(&path, &before_content, &after_content);
+                if !full
+                    && patch_body
+                        .len()
+                        .checked_add(section.len())
+                        .is_none_or(|size| size > DEFAULT_PATCH_LIMIT_BYTES as usize)
+                {
+                    patch_truncated = true;
+                } else {
+                    patch_body.push_str(&section);
+                    patch_truncated = content_omitted;
+                }
             }
         }
 
-        let patch = include_patch.then(|| truncate_patch(sections, full));
+        let patch = include_patch.then(|| finish_patch(patch_body, full, patch_truncated));
         Ok(ComputedDiff { stat, patch })
     }
 
@@ -3478,6 +3516,7 @@ impl JjBridge {
         value: jj_lib::merge::MergedTreeValue,
         path: &RepoPath,
         labels: &jj_lib::conflict_labels::ConflictLabels,
+        read_budget: &mut Option<usize>,
     ) -> Result<PatchContent, AppError> {
         let value = materialize_tree_value(self.repo.store(), path, value, labels)
             .await
@@ -3488,12 +3527,32 @@ impl JjBridge {
             MaterializedTreeValue::Absent => Ok(PatchContent::Absent),
             MaterializedTreeValue::File(mut file) => {
                 let mode = Some(if file.executable { "100755" } else { "100644" });
-                let bytes = file
-                    .read_all(path)
+                let limit = read_budget
+                    .as_ref()
+                    .map(|remaining| (*remaining).min(DEFAULT_FILE_READ_LIMIT_BYTES));
+                let mut bytes = Vec::new();
+                if let Some(limit) = limit {
+                    futures::io::AsyncReadExt::take(
+                        &mut file.reader,
+                        (limit as u64).saturating_add(1),
+                    )
+                    .read_to_end(&mut bytes)
                     .await
                     .map_err(|_| AppError::BackendFailure {
                         operation: "read_diff_content",
                     })?;
+                    *read_budget = Some(read_budget.unwrap_or(0).saturating_sub(bytes.len()));
+                    if bytes.len() > limit {
+                        return Ok(PatchContent::Omitted { mode });
+                    }
+                } else {
+                    bytes = file
+                        .read_all(path)
+                        .await
+                        .map_err(|_| AppError::BackendFailure {
+                            operation: "read_diff_content",
+                        })?;
+                }
                 Ok(PatchContent::from_bytes(bytes, mode))
             }
             MaterializedTreeValue::FileConflict(conflict) => {
@@ -3510,6 +3569,13 @@ impl JjBridge {
                 let mode = conflict
                     .executable
                     .map(|executable| if executable { "100755" } else { "100644" });
+                if let Some(remaining) = read_budget {
+                    let limit = (*remaining).min(DEFAULT_FILE_READ_LIMIT_BYTES);
+                    *remaining = remaining.saturating_sub(bytes.len());
+                    if bytes.len() > limit {
+                        return Ok(PatchContent::Omitted { mode });
+                    }
+                }
                 Ok(PatchContent::from_bytes(bytes, mode))
             }
             MaterializedTreeValue::Symlink { target, .. } => Ok(PatchContent::Text {
@@ -4085,6 +4151,9 @@ enum PatchContent {
     Binary {
         mode: Option<&'static str>,
     },
+    Omitted {
+        mode: Option<&'static str>,
+    },
 }
 
 impl PatchContent {
@@ -4103,19 +4172,23 @@ impl PatchContent {
         match self {
             Self::Absent => Some(""),
             Self::Text { body, .. } => Some(body),
-            Self::Binary { .. } => None,
+            Self::Binary { .. } | Self::Omitted { .. } => None,
         }
     }
 
     fn mode(&self) -> Option<&'static str> {
         match self {
             Self::Absent => None,
-            Self::Text { mode, .. } | Self::Binary { mode } => *mode,
+            Self::Text { mode, .. } | Self::Binary { mode } | Self::Omitted { mode } => *mode,
         }
     }
 
     fn is_absent(&self) -> bool {
         matches!(self, Self::Absent)
+    }
+
+    fn is_omitted(&self) -> bool {
+        matches!(self, Self::Omitted { .. })
     }
 }
 
@@ -4153,6 +4226,9 @@ fn render_file_patch(path: &RepoPath, before: &PatchContent, after: &PatchConten
         _ => {}
     }
     match (before.text(), after.text()) {
+        _ if before.is_omitted() || after.is_omitted() => {
+            section.push_str("Content omitted: default materialization limit exceeded\n");
+        }
         (Some(before_text), Some(after_text)) => {
             let diff = TextDiff::from_lines(before_text, after_text);
             section.push_str(
@@ -4170,42 +4246,15 @@ fn render_file_patch(path: &RepoPath, before: &PatchContent, after: &PatchConten
     section
 }
 
-fn truncate_patch(sections: Vec<String>, full: bool) -> Patch {
-    let full_bytes = sections.iter().fold(0_u64, |total, section| {
-        total.saturating_add(section.len() as u64)
-    });
-    if full {
-        let body = sections.concat();
-        return Patch {
-            body,
-            truncation: Truncation {
-                truncated: false,
-                limit_bytes: None,
-                returned_bytes: full_bytes,
-                omitted_bytes: 0,
-            },
-        };
-    }
-
-    let mut body = String::new();
-    for section in sections {
-        if body
-            .len()
-            .checked_add(section.len())
-            .is_none_or(|size| size > DEFAULT_PATCH_LIMIT_BYTES as usize)
-        {
-            break;
-        }
-        body.push_str(&section);
-    }
+fn finish_patch(body: String, full: bool, truncated: bool) -> Patch {
     let returned_bytes = body.len() as u64;
     Patch {
         body,
         truncation: Truncation {
-            truncated: returned_bytes < full_bytes,
-            limit_bytes: Some(DEFAULT_PATCH_LIMIT_BYTES),
+            truncated,
+            limit_bytes: (!full).then_some(DEFAULT_PATCH_LIMIT_BYTES),
             returned_bytes,
-            omitted_bytes: full_bytes.saturating_sub(returned_bytes),
+            omitted_bytes: (!truncated).then_some(0),
         },
     }
 }

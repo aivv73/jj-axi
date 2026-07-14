@@ -40,10 +40,12 @@ and candidate start line, then candidate start, end, and path, so retries are
 deterministic without returning an unbounded diff.
 
 Selection and mutation use the one repository snapshot loaded by
-`JjBridge::open`; there is no separate plan/apply token. `open` retains its
-standard working-copy synchronization before validation. If the working copy
-changed, the synchronized diff either matches the request exactly or fails.
-An invalid M3 request creates no additional history-edit transaction.
+`JjBridge::open`; there is no separate server-side plan/apply token. `split` and
+`move` require the full source commit ID returned by `diff --hunks`, matching the
+guard later generalized by ADR 0006. `open` retains its standard working-copy
+synchronization before validation. If the working copy changed, the source
+commit guard fails even when the new content has the same hunk range. An invalid
+M3 request creates no additional history-edit transaction.
 
 All history mechanics remain in the existing `JjBridge` jj-lib boundary.
 `jj-cli` and `jj-lib` stay pinned to `=0.43.0`; interactive `jj split -i` and

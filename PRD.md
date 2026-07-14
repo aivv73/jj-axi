@@ -35,9 +35,9 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 
 | Command | Wraps | Notes |
 |---|---|---|
-| `split <change> --hunks "<file>:<lines>,..." --into "<desc>"` | `jj split -i` | Declarative hunk spec instead of interactive editor. **Open question #1 — see §2.** |
+| `split <change> --source-commit-id <full-id> --hunks "<file>:<lines>,..." --into "<desc>"` | `jj split -i` | Declarative hunk spec bound to the inventoried source snapshot instead of an interactive editor. See ADR 0001. |
 | `partition <change> --spec-file <path\|-> [--dry-run] [--details]` | repeated `jj split -i` and remainder routing | Atomically decomposes one guarded source snapshot into ordered named parts with an explicit remainder disposition. See ADR 0006. |
-| `move --from <change> --to <change> --hunks "..."` | manual multi-step today | Combined operation for routing hunks to an *existing* change (as opposed to creating a new one via `split`). |
+| `move --from <change> --to <change> --source-commit-id <full-id> --hunks "..."` | manual multi-step today | Moves guarded hunks to an existing change (as opposed to creating a new one via `split`). |
 | `absorb [--dry-run]` | `jj absorb` | Structured report of what moved where; `--dry-run` previews without mutating. |
 
 ### Stack editing

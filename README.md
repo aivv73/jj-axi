@@ -40,6 +40,7 @@ jj-axi diff <change> --hunks
 
 # Route one hunk into a new change without an editor.
 jj-axi split <change> \
+  --source-commit-id '<full snapshot commit id>' \
   --hunks 'src/lib.rs:12-18' \
   --into 'extract parser'
 
@@ -62,6 +63,7 @@ data:
     changed_files: 2
     added_lines: 14
     removed_lines: 3
+    skipped_files: 0
   conflict_count: 0
   divergence_count: 0
 ```

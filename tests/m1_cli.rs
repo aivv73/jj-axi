@@ -1,6 +1,6 @@
 mod common;
 
-use common::{repository, run_axi, successful_output};
+use common::{repository, run_axi, run_jj, successful_output};
 use std::fs;
 
 #[test]
@@ -112,6 +112,37 @@ fn default_diff_truncates_only_at_file_boundaries_and_full_disables_it() {
     assert!(full.contains("limit_bytes: null"));
     assert!(full.contains("a-large.txt"));
     assert!(full.contains("z-small.txt"));
+}
+
+#[test]
+fn default_diff_reports_files_skipped_by_materialization_limits() {
+    let directory = repository();
+    fs::write(directory.path().join("oversized.txt"), "base\n").expect("write base fixture file");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "large"])
+            .status
+            .success()
+    );
+    fs::write(
+        directory.path().join("oversized.txt"),
+        vec![b'x'; 1024 * 1024 + 1],
+    )
+    .expect("write oversized fixture file");
+
+    let bounded = successful_output(directory.path(), &["diff"]);
+    assert!(bounded.contains("skipped_files: 1"), "{bounded}");
+    assert!(bounded.contains("Content omitted: default materialization limit exceeded"));
+    assert!(bounded.contains("truncated: true"));
+    assert!(bounded.contains("omitted_bytes: null"));
+
+    let full = successful_output(directory.path(), &["diff", "--full"]);
+    assert!(full.contains("skipped_files: 0"));
+    assert!(!full.contains("Content omitted: default materialization limit exceeded"));
 }
 
 #[test]

@@ -64,11 +64,11 @@ Discover canonical post-image selectors before routing nontrivial hunks:
 jj-axi diff <change> --hunks
 ```
 
-Pass the returned `path` and `lines` values unchanged:
+Pass the returned full snapshot commit ID, `path`, and `lines` values unchanged:
 
 ```bash
-jj-axi split <change> --hunks "src/lib.rs:12-18" --into "extract parser"
-jj-axi move --from <change> --to <change> --hunks "src/lib.rs:12-18"
+jj-axi split <change> --source-commit-id <full-id> --hunks "src/lib.rs:12-18" --into "extract parser"
+jj-axi move --from <change> --to <change> --source-commit-id <full-id> --hunks "src/lib.rs:12-18"
 ```
 
 Use `N-0` for a deletion-only boundary. Select multiple hunks with comma-separated entries. Selectors never snap to nearby content: stale or partial ranges fail and return bounded retry candidates. `skipped_paths` identifies content that declarative routing cannot safely address.

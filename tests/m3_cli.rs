@@ -909,11 +909,14 @@ fn diff_hunk_inventory_provides_canonical_split_selectors() {
     assert!(inventory.contains("path: binary.dat"));
     assert!(inventory.contains("reason: unsupported_content"));
 
+    let source_commit_id = common::commit_id(directory.path(), "@");
     let split = successful_output(
         directory.path(),
         &[
             "split",
             "@",
+            "--source-commit-id",
+            &source_commit_id,
             "--hunks",
             "sample.txt:2",
             "--into",
@@ -958,11 +961,14 @@ fn split_and_move_route_post_image_hunks() {
     .trim()
     .to_owned();
 
+    let source_commit_id = common::commit_id(directory.path(), "@");
     let split = successful_output(
         directory.path(),
         &[
             "split",
             "@",
+            "--source-commit-id",
+            &source_commit_id,
             "--hunks",
             "sample.txt:2",
             "--into",
@@ -989,6 +995,7 @@ fn split_and_move_route_post_image_hunks() {
     assert_eq!(changed_lines(&remaining_patch), vec!["-five", "+FIVE"]);
 
     let source_id = change_id(directory.path(), "mixed");
+    let move_source_commit_id = common::commit_id(directory.path(), "@");
     let moved = successful_output(
         directory.path(),
         &[
@@ -997,6 +1004,8 @@ fn split_and_move_route_post_image_hunks() {
             "@",
             "--to",
             "@-",
+            "--source-commit-id",
+            &move_source_commit_id,
             "--hunks",
             "sample.txt:5",
         ],
@@ -1010,6 +1019,53 @@ fn split_and_move_route_post_image_hunks() {
     );
     assert!(jj_ok(directory.path(), &["diff", "-r", "@", "--summary"]).is_empty());
     assert_eq!(change_id(directory.path(), "mixed"), source_id);
+}
+
+#[test]
+fn split_rejects_same_range_content_from_a_new_source_snapshot() {
+    let directory = repository();
+    write(directory.path(), "sample.txt", b"before\n");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "source"])
+            .status
+            .success()
+    );
+    write(directory.path(), "sample.txt", b"inventoried\n");
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    let source_commit_id = inventory
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("commit_id: "))
+        .expect("snapshot commit ID")
+        .to_owned();
+
+    write(directory.path(), "sample.txt", b"replacement\n");
+    let before = fs::read(directory.path().join("sample.txt")).unwrap();
+    let error = assert_error(
+        run_axi(
+            directory.path(),
+            &[
+                "split",
+                "@",
+                "--source-commit-id",
+                &source_commit_id,
+                "--hunks",
+                "sample.txt:1",
+                "--into",
+                "selected",
+            ],
+        ),
+        "stale_partition_source",
+    );
+    assert!(error.contains(&format!("expected_commit_id: {source_commit_id}")));
+    assert_eq!(
+        fs::read(directory.path().join("sample.txt")).unwrap(),
+        before
+    );
 }
 
 #[test]
@@ -1029,11 +1085,14 @@ fn split_supports_full_selection_and_deletion_boundaries() {
     write(directory.path(), "sample.txt", b"one\nthree\n");
     let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
     assert!(inventory.contains("lines: 2-0"));
+    let source_commit_id = common::commit_id(directory.path(), "@");
     let deletion = successful_output(
         directory.path(),
         &[
             "split",
             "@",
+            "--source-commit-id",
+            &source_commit_id,
             "--hunks",
             "sample.txt:2-0",
             "--into",
@@ -1057,11 +1116,14 @@ fn split_supports_full_selection_and_deletion_boundaries() {
     );
     assert!(run_jj(full.path(), &["new", "-m", "all"]).status.success());
     write(full.path(), "all.txt", b"new\n");
+    let source_commit_id = common::commit_id(full.path(), "@");
     let output = successful_output(
         full.path(),
         &[
             "split",
             "@",
+            "--source-commit-id",
+            &source_commit_id,
             "--hunks",
             "all.txt:1",
             "--into",
@@ -1103,6 +1165,8 @@ fn move_supports_ancestor_descendant_and_unrelated_destinations() {
             &source,
             "--to",
             &destination,
+            "--source-commit-id",
+            &common::commit_id(ancestor.path(), &source),
             "--hunks",
             "source.txt:1",
         ],
@@ -1139,6 +1203,8 @@ fn move_supports_ancestor_descendant_and_unrelated_destinations() {
             &source,
             "--to",
             &destination,
+            "--source-commit-id",
+            &common::commit_id(descendant.path(), &source),
             "--hunks",
             "source.txt:1",
         ],
@@ -1177,6 +1243,8 @@ fn move_supports_ancestor_descendant_and_unrelated_destinations() {
             &source,
             "--to",
             &destination,
+            "--source-commit-id",
+            &common::commit_id(unrelated.path(), &source),
             "--hunks",
             "source.txt:1",
         ],
@@ -1202,10 +1270,20 @@ fn invalid_hunks_are_structured_and_do_not_mutate_history() {
     write(directory.path(), "sample.txt", b"one\nTWO\nTHREE\nfour\n");
 
     let before = snapshot(directory.path(), &["sample.txt"]);
+    let source_commit_id = common::commit_id(directory.path(), "@");
     let stale = assert_error_clean(
         run_axi(
             directory.path(),
-            &["split", "@", "--hunks", "sample.txt:1", "--into", "stale"],
+            &[
+                "split",
+                "@",
+                "--source-commit-id",
+                &source_commit_id,
+                "--hunks",
+                "sample.txt:1",
+                "--into",
+                "stale",
+            ],
         ),
         "invalid_hunk_selection",
     );
@@ -1220,6 +1298,8 @@ fn invalid_hunks_are_structured_and_do_not_mutate_history() {
             &[
                 "split",
                 "@",
+                "--source-commit-id",
+                &source_commit_id,
                 "--hunks",
                 "sample.txt:2,sample.txt:2-2",
                 "--into",
@@ -1240,6 +1320,8 @@ fn invalid_hunks_are_structured_and_do_not_mutate_history() {
                 "@",
                 "--to",
                 "@-",
+                "--source-commit-id",
+                &source_commit_id,
                 "--hunks",
                 "sample.txt:2-0",
             ],
@@ -1267,10 +1349,20 @@ fn binary_and_metadata_changes_fail_before_history_mutation() {
     );
     write(binary.path(), "payload.bin", b"left\0right");
     let binary_before = snapshot(binary.path(), &["payload.bin"]);
+    let source_commit_id = common::commit_id(binary.path(), "@");
     let binary_error = assert_error_clean(
         run_axi(
             binary.path(),
-            &["split", "@", "--hunks", "payload.bin:1", "--into", "binary"],
+            &[
+                "split",
+                "@",
+                "--source-commit-id",
+                &source_commit_id,
+                "--hunks",
+                "payload.bin:1",
+                "--into",
+                "binary",
+            ],
         ),
         "invalid_hunk_selection",
     );
@@ -1300,10 +1392,20 @@ fn binary_and_metadata_changes_fail_before_history_mutation() {
     )
     .expect("set changed mode");
     let metadata_before = snapshot(metadata.path(), &["script.sh"]);
+    let source_commit_id = common::commit_id(metadata.path(), "@");
     let metadata_error = assert_error_clean(
         run_axi(
             metadata.path(),
-            &["split", "@", "--hunks", "script.sh:1", "--into", "metadata"],
+            &[
+                "split",
+                "@",
+                "--source-commit-id",
+                &source_commit_id,
+                "--hunks",
+                "script.sh:1",
+                "--into",
+                "metadata",
+            ],
         ),
         "invalid_hunk_selection",
     );
@@ -1342,9 +1444,19 @@ fn split_preserves_unselected_conflict_status_in_remaining_change() {
     );
     write(directory.path(), "good.txt", b"GOOD\n");
 
+    let source_commit_id = common::commit_id(directory.path(), "@");
     let output = successful_output(
         directory.path(),
-        &["split", "@", "--hunks", "good.txt:1", "--into", "selected"],
+        &[
+            "split",
+            "@",
+            "--source-commit-id",
+            &source_commit_id,
+            "--hunks",
+            "good.txt:1",
+            "--into",
+            "selected",
+        ],
     );
     assert!(output.contains("selected:"));
     assert!(output.contains("remaining:"));
@@ -1832,7 +1944,17 @@ fn history_shape_errors_and_output_contracts_are_stable() {
     let same_change = assert_error_clean(
         run_axi(
             directory.path(),
-            &["move", "--from", &two, "--to", &two, "--hunks", "two.txt:1"],
+            &[
+                "move",
+                "--from",
+                &two,
+                "--to",
+                &two,
+                "--source-commit-id",
+                &common::commit_id(directory.path(), &two),
+                "--hunks",
+                "two.txt:1",
+            ],
         ),
         "invalid_history_shape",
     );
@@ -1848,6 +1970,8 @@ fn history_shape_errors_and_output_contracts_are_stable() {
                 &two,
                 "--to",
                 "root()",
+                "--source-commit-id",
+                &common::commit_id(directory.path(), &two),
                 "--hunks",
                 "two.txt:1",
             ],

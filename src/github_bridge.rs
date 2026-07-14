@@ -285,7 +285,7 @@ fn identity_from_remote(url: &str) -> Option<RepositoryIdentity> {
         let rest = url.split_once('@').map_or(url, |(_, value)| value);
         rest.split_once(':')?
     };
-    if host != "github.com" && !host.to_ascii_lowercase().contains("github") {
+    if !host.eq_ignore_ascii_case("github.com") {
         return None;
     }
     let mut parts = path.trim_matches('/').split('/');
@@ -295,7 +295,7 @@ fn identity_from_remote(url: &str) -> Option<RepositoryIdentity> {
         return None;
     }
     Some(RepositoryIdentity {
-        host: host.to_owned(),
+        host: "github.com".to_owned(),
         owner: owner.to_owned(),
         name: name.to_owned(),
     })

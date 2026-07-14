@@ -173,15 +173,29 @@ async fn execute(command: CommandInput, cwd: &Path) -> Result<Response, AppError
         CommandInput::Partition { .. } => unreachable!("partition returns before mutable bridge"),
         CommandInput::Split {
             change,
+            source_commit_id,
             hunks,
             into,
         } => Ok(Response {
             kind: ResponseKind::Split,
-            data: ResponseData::Split(bridge.split_change(&change, &hunks, &into).await?),
+            data: ResponseData::Split(
+                bridge
+                    .split_change(&change, &source_commit_id, &hunks, &into)
+                    .await?,
+            ),
         }),
-        CommandInput::Move { from, to, hunks } => Ok(Response {
+        CommandInput::Move {
+            from,
+            to,
+            source_commit_id,
+            hunks,
+        } => Ok(Response {
             kind: ResponseKind::Move,
-            data: ResponseData::Move(bridge.move_hunks(&from, &to, &hunks).await?),
+            data: ResponseData::Move(
+                bridge
+                    .move_hunks(&from, &to, &source_commit_id, &hunks)
+                    .await?,
+            ),
         }),
         CommandInput::Absorb { dry_run } => Ok(Response {
             kind: ResponseKind::Absorb,
