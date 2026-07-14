@@ -97,6 +97,7 @@ No code or content dependency on any non-compete-licensed or unlicensed project.
 ## 4. Distribution
 
 - Standalone Rust binary, installable via `cargo install` (later `cargo binstall` for prebuilt binaries).
+- Release archives include the MIT license and the checked-in `THIRD_PARTY_LICENSES.html` report generated from `about.toml` and `about.hbs`; CI verifies that the report is current before release builds run.
 - `skills/jj-axi/SKILL.md` is the compact routing skill and is distributed directly through the standard `skills` CLI (`npx skills add <owner>/jj-axi --skill jj-axi`). The native `skill` command prints or atomically materializes the same bytes without invoking JavaScript tooling.
 - Command-specific workflows live in `<command> --help`, keeping instructions aligned with the installed binary.
 - Bare invocation prints the body of that same skill without frontmatter; there is no separate bootstrap artifact.
