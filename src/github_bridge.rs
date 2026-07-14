@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
@@ -32,10 +32,17 @@ impl RepositoryIdentity {
                 });
             }
         };
+        let name = name.trim_end_matches(".git");
+        if !valid_host(host) || !valid_owner(owner) || !valid_repository_name(name) {
+            return Err(AppError::InvalidArgument {
+                argument: "repo",
+                constraint: "github_repository_identity",
+            });
+        }
         Ok(Self {
             host: host.to_owned(),
             owner: owner.to_owned(),
-            name: name.trim_end_matches(".git").to_owned(),
+            name: name.to_owned(),
         })
     }
 
@@ -45,7 +52,7 @@ impl RepositoryIdentity {
 }
 
 pub(crate) fn pr_status(
-    _cwd: &Path,
+    cwd: &Path,
     number: u64,
     repository: Option<&str>,
     remote_urls: &[String],
@@ -70,7 +77,7 @@ pub(crate) fn pr_status(
             }
         }
     };
-    let (pr_value, nodes) = fetch_pr_pages(&identity, number)?;
+    let (pr_value, nodes) = fetch_pr_pages(cwd, &identity, number)?;
     let pr = pr_value
         .as_object()
         .ok_or(AppError::GithubResponseInvalid)?;
@@ -173,23 +180,27 @@ pub(crate) fn pr_status(
 }
 
 fn fetch_pr_pages(
+    cwd: &Path,
     identity: &RepositoryIdentity,
     number: u64,
 ) -> Result<(Value, Vec<Value>), AppError> {
     let mut after: Option<String> = None;
     let mut seen_cursors = HashSet::new();
     let mut first_pr = None;
+    let mut first_head = None;
     let mut nodes = Vec::new();
     loop {
         let mut command = Command::new("gh");
         command
             .args(["api", "graphql", "-f", &format!("query={QUERY}")])
-            .args(["-F", &format!("owner={}", identity.owner)])
-            .args(["-F", &format!("name={}", identity.name)])
+            .args(["-f", &format!("owner={}", identity.owner)])
+            .args(["-f", &format!("name={}", identity.name)])
             .args(["-F", &format!("number={number}")])
-            .env("GH_PROMPT_DISABLED", "1");
+            .env("GH_PROMPT_DISABLED", "1")
+            .current_dir(cwd)
+            .stdin(Stdio::null());
         if let Some(cursor) = &after {
-            command.args(["-F", &format!("after={cursor}")]);
+            command.args(["-f", &format!("after={cursor}")]);
         }
         if identity.host != "github.com" {
             command.args(["--hostname", &identity.host]);
@@ -224,6 +235,20 @@ fn fetch_pr_pages(
             .pointer("/data/repository/pullRequest")
             .cloned()
             .ok_or(AppError::GithubResponseInvalid)?;
+        if pr.is_null() {
+            return Err(AppError::PullRequestNotFound { number });
+        }
+        let pr_object = pr.as_object().ok_or(AppError::GithubResponseInvalid)?;
+        if pr_object.get("number").and_then(Value::as_u64) != Some(number) {
+            return Err(AppError::GithubResponseInvalid);
+        }
+        let head = required_string(pr_object, "headRefOid")?;
+        if first_head.as_deref().is_some_and(|first| first != head) {
+            return Err(AppError::GithubResponseInvalid);
+        }
+        if first_head.is_none() {
+            first_head = Some(head.to_owned());
+        }
         if first_pr.is_none() {
             first_pr = Some(pr.clone());
         }
@@ -261,6 +286,44 @@ fn fetch_pr_pages(
     Ok((first_pr.ok_or(AppError::GithubResponseInvalid)?, nodes))
 }
 
+fn valid_host(value: &str) -> bool {
+    value.split('.').all(|label| {
+        !label.is_empty()
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            && label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric)
+    })
+}
+
+fn valid_owner(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn valid_repository_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
 fn classify_gh_failure(stderr: &[u8]) -> AppError {
     let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
     if message.contains("auth") || message.contains("login") || message.contains("token") {
@@ -291,7 +354,7 @@ fn identity_from_remote(url: &str) -> Option<RepositoryIdentity> {
     let mut parts = path.trim_matches('/').split('/');
     let owner = parts.next()?;
     let name = parts.next()?.trim_end_matches(".git");
-    if owner.is_empty() || name.is_empty() || parts.next().is_some() {
+    if parts.next().is_some() || !valid_owner(owner) || !valid_repository_name(name) {
         return None;
     }
     Some(RepositoryIdentity {

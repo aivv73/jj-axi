@@ -37,7 +37,31 @@ pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, A
             reason: "missing_file_name",
         })?;
     let destination = parent.join(file_name);
-    let existing = match fs::symlink_metadata(&destination) {
+    let action = if let Some(action) = existing_skill_action(&destination, force)? {
+        action
+    } else {
+        match atomic_write(&destination, None)? {
+            AtomicWriteOutcome::Published => SetupSkillAction::Created,
+            AtomicWriteOutcome::AlreadyExists => existing_skill_action(&destination, false)?
+                .ok_or(AppError::BackendFailure {
+                    operation: "setup_skill",
+                })?,
+        }
+    };
+    let sha256 = format!("{:x}", Sha256::digest(SKILL_BYTES));
+    Ok(SetupSkillData {
+        output_path: destination.display().to_string(),
+        sha256,
+        bytes: SKILL_BYTES.len() as u64,
+        action,
+    })
+}
+
+fn existing_skill_action(
+    destination: &Path,
+    force: bool,
+) -> Result<Option<SetupSkillAction>, AppError> {
+    let metadata = match fs::symlink_metadata(destination) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(AppError::InvalidSkillOutput {
                 path: destination.display().to_string(),
@@ -50,8 +74,8 @@ pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, A
                 reason: "not_regular_file",
             });
         }
-        Ok(metadata) => Some(metadata),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => {
             return Err(AppError::InvalidSkillOutput {
                 path: destination.display().to_string(),
@@ -59,36 +83,32 @@ pub(crate) fn setup_skill(output: &str, force: bool) -> Result<SetupSkillData, A
             });
         }
     };
-    let action = if let Some(metadata) = existing {
-        let current = fs::read(&destination).map_err(|_| AppError::InvalidSkillOutput {
-            path: destination.display().to_string(),
-            reason: "unreadable",
-        })?;
-        if current == SKILL_BYTES {
-            SetupSkillAction::Unchanged
-        } else if force {
-            let permissions = metadata.permissions();
-            atomic_write(&destination, Some(permissions))?;
-            SetupSkillAction::Updated
-        } else {
-            return Err(AppError::SkillOutputConflict {
-                path: destination.display().to_string(),
-            });
-        }
+    let current = fs::read(destination).map_err(|_| AppError::InvalidSkillOutput {
+        path: destination.display().to_string(),
+        reason: "unreadable",
+    })?;
+    if current == SKILL_BYTES {
+        Ok(Some(SetupSkillAction::Unchanged))
+    } else if force {
+        atomic_write(destination, Some(metadata.permissions()))?;
+        Ok(Some(SetupSkillAction::Updated))
     } else {
-        atomic_write(&destination, None)?;
-        SetupSkillAction::Created
-    };
-    let sha256 = format!("{:x}", Sha256::digest(SKILL_BYTES));
-    Ok(SetupSkillData {
-        output_path: destination.display().to_string(),
-        sha256,
-        bytes: SKILL_BYTES.len() as u64,
-        action,
-    })
+        Err(AppError::SkillOutputConflict {
+            path: destination.display().to_string(),
+        })
+    }
 }
 
-fn atomic_write(destination: &Path, permissions: Option<fs::Permissions>) -> Result<(), AppError> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AtomicWriteOutcome {
+    Published,
+    AlreadyExists,
+}
+
+fn atomic_write(
+    destination: &Path,
+    permissions: Option<fs::Permissions>,
+) -> Result<AtomicWriteOutcome, AppError> {
     let parent = destination.parent().ok_or(AppError::Internal)?;
     let file_name = destination
         .file_name()
@@ -115,22 +135,63 @@ fn atomic_write(destination: &Path, permissions: Option<fs::Permissions>) -> Res
         let result = (|| {
             file.write_all(SKILL_BYTES)?;
             file.sync_all()?;
-            if let Some(permissions) = permissions {
-                file.set_permissions(permissions)?;
+            if let Some(permissions) = &permissions {
+                file.set_permissions(permissions.clone())?;
             }
             drop(file);
-            fs::rename(&temporary, destination)?;
+            if permissions.is_some() {
+                fs::rename(&temporary, destination)?;
+            } else {
+                fs::hard_link(&temporary, destination)?;
+                fs::remove_file(&temporary)?;
+            }
             Ok::<(), std::io::Error>(())
         })();
-        if result.is_err() {
+        if let Err(error) = result {
             let _ = fs::remove_file(&temporary);
+            if permissions.is_none() && error.kind() == std::io::ErrorKind::AlreadyExists {
+                return Ok(AtomicWriteOutcome::AlreadyExists);
+            }
             return Err(AppError::BackendFailure {
                 operation: "setup_skill",
             });
         }
-        return Ok(());
+        return Ok(AtomicWriteOutcome::Published);
     }
     Err(AppError::BackendFailure {
         operation: "setup_skill",
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_replace_publication_preserves_a_concurrently_created_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("SKILL.md");
+        fs::write(&destination, b"concurrent contents").unwrap();
+
+        let result = atomic_write(&destination, None);
+
+        assert_eq!(result.unwrap(), AtomicWriteOutcome::AlreadyExists);
+        assert_eq!(fs::read(destination).unwrap(), b"concurrent contents");
+    }
+
+    #[test]
+    fn concurrent_identical_publication_is_idempotent() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("SKILL.md");
+        fs::write(&destination, SKILL_BYTES).unwrap();
+
+        assert_eq!(
+            atomic_write(&destination, None).unwrap(),
+            AtomicWriteOutcome::AlreadyExists
+        );
+        assert_eq!(
+            existing_skill_action(&destination, false).unwrap(),
+            Some(SetupSkillAction::Unchanged)
+        );
+    }
 }

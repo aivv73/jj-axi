@@ -9,8 +9,13 @@ permissions:
   contents: read
 
 jobs:
+  verify:
+    name: Run normal CI
+    uses: ./.github/workflows/ci.yml
+
   build:
     name: ${{ matrix.target }}
+    needs: verify
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -55,8 +60,8 @@ jobs:
           archive="jj-axi-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
           mkdir staging dist
           cp "target/${{ matrix.target }}/release/jj-axi" staging/
-          cp README.md LICENSE staging/
-          tar -czf "dist/${archive}" -C staging jj-axi README.md LICENSE
+          cp README.md LICENSE THIRD_PARTY_LICENSES.html staging/
+          tar -czf "dist/${archive}" -C staging jj-axi README.md LICENSE THIRD_PARTY_LICENSES.html
 
       - name: Upload release archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

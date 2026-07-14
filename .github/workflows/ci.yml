@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -77,6 +78,16 @@ jobs:
       - name: Check Cargo package
         if: runner.os == 'Linux'
         run: cargo package --locked
+
+      - name: Install cargo-about
+        if: runner.os == 'Linux'
+        run: cargo install cargo-about --version 0.8.1 --locked
+
+      - name: Check third-party license report
+        if: runner.os == 'Linux'
+        run: |
+          cargo about generate --locked about.hbs -o "${RUNNER_TEMP}/THIRD_PARTY_LICENSES.html"
+          cmp THIRD_PARTY_LICENSES.html "${RUNNER_TEMP}/THIRD_PARTY_LICENSES.html"
 
       - name: Check whitespace errors
         run: git diff --check
