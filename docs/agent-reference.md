@@ -43,7 +43,7 @@ jj-axi show <change>
 jj-axi diff <change> --full
 ```
 
-Diff bodies are bounded by default. Request `--full` only when the complete patch is necessary. For ordinary status, log, show, or diff questions, prefer raw `jj`.
+Diff bodies are bounded by default. Request `--full` only when the complete patch is necessary. Bounded reads omit conflicts before jj-lib materializes their terms. Hunk inventory remains bounded even with `--full`: it reads at most 1 MiB per file and 8 MiB in aggregate, reporting `materialization_limit` in `skipped_paths`. For ordinary status, log, show, or diff questions, prefer raw `jj`.
 
 ## Validate and publish deterministically
 
@@ -71,7 +71,7 @@ jj-axi split <change> --source-commit-id <full-id> --hunks "src/lib.rs:12-18" --
 jj-axi move --from <change> --to <change> --source-commit-id <full-id> --hunks "src/lib.rs:12-18"
 ```
 
-Use `N-0` for a deletion-only boundary. Select multiple hunks with comma-separated entries. Selectors never snap to nearby content: stale or partial ranges fail and return bounded retry candidates. `skipped_paths` identifies content that declarative routing cannot safely address.
+Use `N-0` for a deletion-only boundary. Select multiple hunks with comma-separated entries. Selectors never snap to nearby content: stale or partial ranges fail and return bounded retry candidates. `skipped_paths` identifies content that declarative routing cannot safely address. Split, move, and partition enforce the same 1 MiB-per-file and 8 MiB-aggregate materialization ceiling as inventory and reject `materialization_limit` before mutation.
 
 Partition one guarded snapshot into several ordered changes when repeated binary splits would force re-inventory of each remainder. Copy the full `snapshot.commit_id` and canonical hunks from `diff --hunks` into a strict JSON manifest:
 

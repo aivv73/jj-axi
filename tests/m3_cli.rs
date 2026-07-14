@@ -927,6 +927,76 @@ fn diff_hunk_inventory_provides_canonical_split_selectors() {
 }
 
 #[test]
+fn hunk_inventory_and_selection_reject_oversized_materialization() {
+    let directory = repository();
+    write(directory.path(), "oversized.txt", b"base\n");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "large"])
+            .status
+            .success()
+    );
+    write(
+        directory.path(),
+        "oversized.txt",
+        &vec![b'x'; 1024 * 1024 + 1],
+    );
+
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    assert!(inventory.contains("hunks: []"), "{inventory}");
+    assert!(inventory.contains("path: oversized.txt"), "{inventory}");
+    assert!(
+        inventory.contains("reason: materialization_limit"),
+        "{inventory}"
+    );
+
+    let source_commit_id = common::commit_id(directory.path(), "@");
+    let rejected = assert_error(
+        run_axi(
+            directory.path(),
+            &[
+                "split",
+                "@",
+                "--source-commit-id",
+                &source_commit_id,
+                "--hunks",
+                "oversized.txt:1",
+                "--into",
+                "selected",
+            ],
+        ),
+        "invalid_hunk_selection",
+    );
+    assert!(
+        rejected.contains("reason: materialization_limit"),
+        "{rejected}"
+    );
+}
+
+#[test]
+fn hunk_inventory_enforces_the_aggregate_materialization_limit() {
+    let directory = repository();
+    for index in 0..9 {
+        write(
+            directory.path(),
+            &format!("file-{index}.txt"),
+            &vec![b'a' + index as u8; 1024 * 1024],
+        );
+    }
+
+    let inventory = successful_output(directory.path(), &["diff", "--hunks"]);
+    assert!(inventory.contains("path: file-8.txt"), "{inventory}");
+    assert!(
+        inventory.contains("reason: materialization_limit"),
+        "{inventory}"
+    );
+}
+
+#[test]
 fn split_and_move_route_post_image_hunks() {
     let directory = repository();
     write(

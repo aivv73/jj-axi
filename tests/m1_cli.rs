@@ -146,6 +146,70 @@ fn default_diff_reports_files_skipped_by_materialization_limits() {
 }
 
 #[test]
+fn bounded_reads_omit_conflicts_before_materializing_them() {
+    let directory = repository();
+    fs::write(directory.path().join("conflict.txt"), "base\n").expect("write base file");
+    assert!(
+        run_jj(directory.path(), &["describe", "-m", "base"])
+            .status
+            .success()
+    );
+    let base = common::commit_id(directory.path(), "@");
+
+    assert!(
+        run_jj(directory.path(), &["new", "-m", "left"])
+            .status
+            .success()
+    );
+    fs::write(
+        directory.path().join("conflict.txt"),
+        vec![b'L'; 400 * 1024],
+    )
+    .expect("write left side");
+    let left = common::commit_id(directory.path(), "@");
+
+    assert!(
+        run_jj(directory.path(), &["new", "root()", "-m", "right"])
+            .status
+            .success()
+    );
+    fs::write(
+        directory.path().join("conflict.txt"),
+        vec![b'R'; 400 * 1024],
+    )
+    .expect("write right side");
+    let right = common::commit_id(directory.path(), "@");
+
+    assert!(
+        run_jj(directory.path(), &["new", &left, &right, "-m", "merge"])
+            .status
+            .success()
+    );
+    let merge = common::commit_id(directory.path(), "@");
+    assert!(
+        run_jj(directory.path(), &["new", &base, "-m", "conflict change"])
+            .status
+            .success()
+    );
+    assert!(
+        run_jj(directory.path(), &["restore", "--from", &merge])
+            .status
+            .success()
+    );
+
+    for args in [&["diff"][..], &["show", "@"][..]] {
+        let output = successful_output(directory.path(), args);
+        assert!(output.contains("skipped_files: 1"), "{args:?}: {output}");
+        assert!(
+            output.contains("Content omitted: default materialization limit exceeded"),
+            "{args:?}: {output}"
+        );
+    }
+    let inspect = successful_output(directory.path(), &["inspect"]);
+    assert!(inspect.contains("skipped_files: 1"), "{inspect}");
+}
+
+#[test]
 fn expected_failures_use_the_error_envelope() {
     let directory = repository();
     let invalid = run_axi(directory.path(), &["log", "--limit", "0"]);

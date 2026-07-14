@@ -212,6 +212,7 @@ Other Jujutsu versions, operating systems, and architectures may work but are no
 
 - jj-axi operates on standard Jujutsu repositories through `jj-lib`.
 - History selectors use exact post-image hunk boundaries; stale or partial ranges fail with bounded canonical recovery candidates.
+- Hunk inventory and selection read at most 1 MiB per file and 8 MiB in aggregate; oversized paths are reported or rejected with `materialization_limit`.
 - Read commands do not fetch remotes.
 - Publication uses explicit bookmarks and structured partial results.
 - GitHub authentication, SSO, and enterprise routing are delegated to `gh`.

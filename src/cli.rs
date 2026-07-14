@@ -8,8 +8,10 @@ For split, move, or partition, first run:
 
 The response includes one immutable snapshot commit ID and canonical post-image
 path/lines selectors. Copy those values unchanged. Do not derive line ranges
-from rendered patch text; selectors never snap to nearby content. Use --full
-only when the complete patch body is required.
+from rendered patch text; selectors never snap to nearby content. Hunk inventory
+reads at most 1 MiB per file and 8 MiB in aggregate; skipped_paths reports
+materialization_limit when that ceiling is reached. Use --full only when the
+complete patch body is required; it does not remove hunk-inventory limits.
 
 Example:
   jj-axi diff @ --hunks"#;
@@ -20,7 +22,8 @@ First run `jj-axi diff <change> --hunks`, then copy the full snapshot commit ID
 into --source-commit-id and returned path/lines selectors unchanged into --hunks.
 Separate multiple selectors with commas. Use N-0 exactly as returned for
 deletion-only boundaries. Stale, partial, duplicate, binary, or unsupported
-selections fail before history mutation.
+selections fail before history mutation. Selection has the same 1 MiB-per-file
+and 8 MiB-aggregate materialization ceiling as hunk inventory.
 
 Example:
   jj-axi split @ --source-commit-id <full-id> --hunks 'src/lib.rs:12-18,tests/lib.rs:8-14' --into 'extract parser'"#;
@@ -31,7 +34,8 @@ First run `jj-axi diff <source> --hunks`, then copy the full snapshot commit ID
 into --source-commit-id and returned path/lines selectors unchanged into --hunks.
 Use move only when both source and destination already exist; use split to create
 a new destination. Selectors never snap, and invalid or stale selections fail
-before history mutation.
+before history mutation. Selection has the same 1 MiB-per-file and 8 MiB-
+aggregate materialization ceiling as hunk inventory.
 
 Example:
   jj-axi move --from <source> --to <destination> --source-commit-id <full-id> --hunks 'src/lib.rs:12-18'"#;
@@ -63,7 +67,9 @@ Parts are ordered oldest to newest. Remainder destination must be one of:
 
 Inspect a --details dry-run unless every assignment is mechanically obvious.
 The source commit guard rejects stale plans. Apply is one operation and one undo
-boundary; rewrite conflicts are returned as successful structured state."#;
+boundary; rewrite conflicts are returned as successful structured state.
+Assignments exceeding the 1 MiB-per-file or 8 MiB-aggregate materialization
+ceiling are rejected before mutation."#;
 
 const ABSORB_HELP: &str = r#"Infer destinations and absorb eligible working-copy changes into mutable ancestors.
 

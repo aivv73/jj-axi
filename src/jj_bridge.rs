@@ -790,6 +790,7 @@ impl JjBridge {
         }
 
         let mut assigned = BTreeMap::<(String, String), u64>::new();
+        let mut cumulative_specs = Vec::new();
         let mut parts = Vec::with_capacity(loaded.manifest.parts.len());
         for (index, (part, specs)) in loaded.manifest.parts.iter().zip(&loaded.specs).enumerate() {
             let ordinal = index as u64 + 1;
@@ -804,8 +805,9 @@ impl JjBridge {
                     });
                 }
             }
+            cumulative_specs.extend(specs.iter().cloned());
             let (_, hunks) = self
-                .select_hunks(&source, specs, "partition_preview")
+                .select_hunks(&source, &cumulative_specs, "partition_preview")
                 .await
                 .map_err(|error| match error {
                     AppError::InvalidHunkSelection {
@@ -826,8 +828,15 @@ impl JjBridge {
                 ordinal,
                 change_id: (ordinal == 1).then(|| source.change_id().to_string()),
                 description: normalize_message(&part.description),
-                hunk_count: hunks.len() as u64,
-                hunks: details.then_some(hunks),
+                hunk_count: specs.len() as u64,
+                hunks: details.then(|| {
+                    hunks
+                        .into_iter()
+                        .filter(|hunk| {
+                            assigned.get(&(hunk.path.clone(), hunk.lines.clone())) == Some(&ordinal)
+                        })
+                        .collect()
+                }),
                 status: Status {
                     conflicted: source.has_conflict(),
                 },
@@ -2222,6 +2231,7 @@ impl JjBridge {
 
         let mut selected_files = Vec::new();
         let mut selected_hunks = Vec::new();
+        let mut read_budget = Some(DEFAULT_TOTAL_READ_LIMIT_BYTES);
         let mut diff_stream = parent_tree.diff_stream(&commit.tree(), &EverythingMatcher);
         while let Some(TreeDiffEntry { path, values }) = diff_stream.next().await {
             let path_string = path.as_internal_file_string().to_owned();
@@ -2264,13 +2274,21 @@ impl JjBridge {
             }
 
             let before_content = self
-                .materialize_content(before_value, &path, parent_tree.labels(), &mut None)
+                .materialize_content(before_value, &path, parent_tree.labels(), &mut read_budget)
                 .await
                 .map_err(|_| AppError::BackendFailure { operation })?;
             let after_content = self
-                .materialize_content(after_value, &path, commit.tree().labels(), &mut None)
+                .materialize_content(after_value, &path, commit.tree().labels(), &mut read_budget)
                 .await
                 .map_err(|_| AppError::BackendFailure { operation })?;
+            if before_content.is_omitted() || after_content.is_omitted() {
+                return Err(invalid_hunk_selection(
+                    &path_string,
+                    requested_ranges[0],
+                    "materialization_limit",
+                    Vec::new(),
+                ));
+            }
             let Some(before_text) = before_content.text() else {
                 return Err(invalid_hunk_selection(
                     &path_string,
@@ -2427,6 +2445,7 @@ impl JjBridge {
     ) -> Result<TextHunkAnalysis, AppError> {
         let mut hunks = Vec::new();
         let mut skipped_paths = Vec::new();
+        let mut read_budget = Some(DEFAULT_TOTAL_READ_LIMIT_BYTES);
         let mut diff_stream = before.diff_stream(after, &EverythingMatcher);
         while let Some(TreeDiffEntry { path, values }) = diff_stream.next().await {
             let path_string = path.as_internal_file_string().to_owned();
@@ -2477,13 +2496,20 @@ impl JjBridge {
                 continue;
             }
             let before_content = self
-                .materialize_content(before_value, &path, before.labels(), &mut None)
+                .materialize_content(before_value, &path, before.labels(), &mut read_budget)
                 .await
                 .map_err(|_| AppError::BackendFailure { operation })?;
             let after_content = self
-                .materialize_content(after_value, &path, after.labels(), &mut None)
+                .materialize_content(after_value, &path, after.labels(), &mut read_budget)
                 .await
                 .map_err(|_| AppError::BackendFailure { operation })?;
+            if before_content.is_omitted() || after_content.is_omitted() {
+                skipped_paths.push(SkippedPath {
+                    path: path_string,
+                    reason: "materialization_limit".to_owned(),
+                });
+                continue;
+            }
             let (Some(before_text), Some(after_text)) =
                 (before_content.text(), after_content.text())
             else {
@@ -3518,6 +3544,12 @@ impl JjBridge {
         labels: &jj_lib::conflict_labels::ConflictLabels,
         read_budget: &mut Option<usize>,
     ) -> Result<PatchContent, AppError> {
+        // jj-lib reads every conflict term before returning a materialized
+        // value. Bounded reads must omit unresolved values before crossing
+        // that allocation boundary. Explicit `--full` reads remain unbounded.
+        if read_budget.is_some() && value.as_resolved().is_none() {
+            return Ok(PatchContent::Omitted { mode: None });
+        }
         let value = materialize_tree_value(self.repo.store(), path, value, labels)
             .await
             .map_err(|_| AppError::BackendFailure {
@@ -3532,15 +3564,13 @@ impl JjBridge {
                     .map(|remaining| (*remaining).min(DEFAULT_FILE_READ_LIMIT_BYTES));
                 let mut bytes = Vec::new();
                 if let Some(limit) = limit {
-                    futures::io::AsyncReadExt::take(
-                        &mut file.reader,
-                        (limit as u64).saturating_add(1),
-                    )
-                    .read_to_end(&mut bytes)
-                    .await
-                    .map_err(|_| AppError::BackendFailure {
-                        operation: "read_diff_content",
-                    })?;
+                    let probe_limit = u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1);
+                    futures::io::AsyncReadExt::take(&mut file.reader, probe_limit)
+                        .read_to_end(&mut bytes)
+                        .await
+                        .map_err(|_| AppError::BackendFailure {
+                            operation: "read_diff_content",
+                        })?;
                     *read_budget = Some(read_budget.unwrap_or(0).saturating_sub(bytes.len()));
                     if bytes.len() > limit {
                         return Ok(PatchContent::Omitted { mode });
