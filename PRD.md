@@ -63,14 +63,14 @@ Each command must have an explicit contract: which jj operation(s) it wraps, wha
 | Command | Wraps | Notes |
 |---|---|---|
 | `bookmark list/set/push` | `jj bookmark` + `jj git push` | Bounded multi-remote collaboration view over local tracking state; explicit safe local movement and exact-name publication. Listing never fetches. |
-| `pr status <number> [--repo <[host/]owner/name>]` | GitHub GraphQL API through authenticated `gh` | Explicit PR selection; normalized multi-host repository identity; aggregate check, review, and mergeability state; derived merge readiness and ordered blocking reasons. No prompts or raw GitHub schema output. |
+| `pr status <number> [--repo <[host/]owner/name>]` | GitHub GraphQL API through authenticated `gh` | Explicit PR selection; validated multi-host repository identity; aggregate check, review, and mergeability state from one head-consistent paginated snapshot; derived merge readiness and ordered blocking reasons. No prompts, stdin, local-file field expansion, or raw GitHub schema output. |
 
 ### Agent discovery and setup
 
 | Command | Wraps | Notes |
 |---|---|---|
 | `jj-axi` | — | Prints the body of the canonical routing skill without YAML frontmatter. Does not open a repository. |
-| `skill [--full \| --output <path> [--force]]` | — | By default, prints the compact command router and global safety rules. `--full` prints the detailed agent reference. `--output` atomically materializes the routing skill; it is idempotent for identical bytes and protective of differing or non-regular destinations. |
+| `skill [--full \| --output <path> [--force]]` | — | By default, prints the compact command router and global safety rules. `--full` prints the detailed agent reference. `--output` atomically materializes the routing skill; without force, concurrent creation never overwrites the winner, identical bytes are idempotent, and differing or non-regular destinations remain protected. |
 | `setup skill --output <path> [--force]` | — | Compatibility alias for protected skill installation. |
 
 ## 2. Open design questions
@@ -97,6 +97,7 @@ No code or content dependency on any non-compete-licensed or unlicensed project.
 ## 4. Distribution
 
 - Standalone Rust binary, installable via `cargo install` (later `cargo binstall` for prebuilt binaries).
+- Release archives include the MIT license and the checked-in `THIRD_PARTY_LICENSES.html` report generated from `about.toml` and `about.hbs`; CI verifies that the report is current before release builds run.
 - `skills/jj-axi/SKILL.md` is the compact routing skill and is distributed directly through the standard `skills` CLI (`npx skills add <owner>/jj-axi --skill jj-axi`). The native `skill` command prints or atomically materializes the same bytes without invoking JavaScript tooling.
 - Command-specific workflows live in `<command> --help`, keeping instructions aligned with the installed binary.
 - Bare invocation prints the body of that same skill without frontmatter; there is no separate bootstrap artifact.

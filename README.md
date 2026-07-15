@@ -115,7 +115,7 @@ Remainder policies:
 - `working_copy` — route unfinished content into the invoking workspace change;
 - `require_empty` — reject the plan unless every source hunk is assigned.
 
-Partition applies all parts, descendant rewrites, bookmarks, and workspace updates as one operation and one undo boundary. Rewrite conflicts are successful structured state rather than ambiguous command failure.
+Partition applies all parts, descendant rewrites, bookmarks, and workspace updates as one operation and one undo boundary. Rewrite conflicts are successful structured state rather than ambiguous command failure. If post-commit colocated-Git synchronization or working-copy update fails, `operation_incomplete` identifies the failed step and reports that repository state was already updated; inspect before retrying.
 
 ## Command surface
 
@@ -160,7 +160,7 @@ Prerequisites:
 - Jujutsu 0.43.0 available as `jj` on `PATH` for working-copy synchronization;
 - `gh` only when using `pr status`.
 
-Prebuilt archives for Linux x86-64 and macOS x86-64/Apple Silicon are published on [GitHub Releases](https://github.com/aivv73/jj-axi/releases). Each release includes a `SHA256SUMS` file. Verify the selected archive before extracting it (`sha256sum -c SHA256SUMS` on Linux or `shasum -a 256 -c SHA256SUMS` on macOS), then place `jj-axi` somewhere on `PATH`.
+Prebuilt archives for Linux x86-64 and macOS x86-64/Apple Silicon are published on [GitHub Releases](https://github.com/aivv73/jj-axi/releases) after the normal CI matrix passes. Each release includes a `SHA256SUMS` file, and each archive includes the MIT license plus `THIRD_PARTY_LICENSES.html`. Verify the selected archive before extracting it (`sha256sum -c SHA256SUMS` on Linux or `shasum -a 256 -c SHA256SUMS` on macOS), then place `jj-axi` somewhere on `PATH`.
 
 Build from source:
 
@@ -188,7 +188,7 @@ Install the compact routing skill with the Vercel Skills CLI:
 npx skills add aivv73/jj-axi --skill jj-axi
 ```
 
-Alternatively, install the embedded skill atomically. Existing differing content is protected unless `--force` is supplied:
+Alternatively, install the embedded skill atomically. Without `--force`, concurrent creation never overwrites the winner: identical content is reported unchanged and differing content remains protected. `--force` replaces differing regular-file content while preserving its permissions:
 
 ```bash
 mkdir -p .agents/skills/jj-axi
@@ -215,7 +215,8 @@ Other Jujutsu versions, operating systems, and architectures may work but are no
 - Hunk inventory and selection read at most 1 MiB per file and 8 MiB in aggregate; oversized paths are reported or rejected with `materialization_limit`.
 - Read commands do not fetch remotes.
 - Publication uses explicit bookmarks and structured partial results.
-- GitHub authentication, SSO, and enterprise routing are delegated to `gh`.
+- Mutations in colocated repositories synchronize Git state only after committing Jujutsu state; a synchronization failure is an explicit changed-state partial result.
+- GitHub authentication, SSO, and enterprise routing are delegated to `gh`; `pr status` runs it with prompts and stdin disabled, validates repository identity before invocation, and rejects inconsistent paginated PR snapshots.
 - Bare undo skips synchronization-only and foundation operations.
 
 The architecture and trade-offs are documented in [`docs/adr/`](./docs/adr/). Domain terminology lives in [`CONTEXT.md`](./CONTEXT.md).

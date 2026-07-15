@@ -42,6 +42,21 @@ pub enum RemoteBookmarkRejectReason {
     LocalConflicted,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperationIncompleteStep {
+    ColocatedGitSynchronization,
+    WorkingCopyUpdate,
+}
+
+impl OperationIncompleteStep {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ColocatedGitSynchronization => "colocated_git_synchronization",
+            Self::WorkingCopyUpdate => "working_copy_update",
+        }
+    }
+}
+
 impl RemoteBookmarkRejectReason {
     fn as_str(self) -> &'static str {
         match self {
@@ -137,6 +152,7 @@ pub enum AppError {
     },
     OperationIncomplete {
         operation: &'static str,
+        failed_step: OperationIncompleteStep,
     },
     FinishPartial {
         change_id: String,
@@ -343,10 +359,13 @@ impl AppError {
                 ("remote", string(remote)),
                 ("reason", string(reason.as_str())),
             ]),
-            Self::OperationIncomplete { operation } => ToonValue::Object(vec![
+            Self::OperationIncomplete {
+                operation,
+                failed_step,
+            } => ToonValue::Object(vec![
                 ("code", string("operation_incomplete")),
                 ("operation", string(operation)),
-                ("failed_step", string("working_copy_update")),
+                ("failed_step", string(failed_step.as_str())),
                 ("repository_state", string("updated")),
             ]),
             Self::FinishPartial {
@@ -613,4 +632,21 @@ impl AppError {
 
 fn string(value: &str) -> ToonValue {
     ToonValue::String(value.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operation_incomplete_reports_the_actual_failed_step() {
+        let error = AppError::OperationIncomplete {
+            operation: "partition",
+            failed_step: OperationIncompleteStep::ColocatedGitSynchronization,
+        };
+
+        let rendered = crate::toon::render(&error.to_toon_value());
+        assert!(rendered.contains("failed_step: colocated_git_synchronization"));
+        assert!(!rendered.contains("failed_step: working_copy_update"));
+    }
 }

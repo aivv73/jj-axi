@@ -59,8 +59,8 @@ use similar::{ChangeTag, TextDiff};
 
 use crate::cli::{HunkRange, HunkSpec, LogField};
 use crate::error::{
-    AppError, PublicationFailureReason, PublicationRemoteState, ReadinessReason,
-    RemoteBookmarkRejectReason, RewritabilityReason,
+    AppError, OperationIncompleteStep, PublicationFailureReason, PublicationRemoteState,
+    ReadinessReason, RemoteBookmarkRejectReason, RewritabilityReason,
 };
 use crate::model::{
     AbandonAction, AbandonData, AbsorbData, AbsorbMove, AbsorbSourceAction,
@@ -741,9 +741,17 @@ impl JjBridge {
         let mut descendants: Vec<_> = commits
             .iter()
             .filter(|commit| commit.id() != source.id())
-            .map(history_change_from_commit)
+            .map(|commit| PartitionImpactDescendant {
+                commit_id: commit.id().clone(),
+                change: history_change_from_commit(commit),
+            })
             .collect();
-        descendants.sort_by(|left, right| left.change_id.cmp(&right.change_id));
+        descendants.sort_by(|left, right| {
+            left.change
+                .change_id
+                .cmp(&right.change.change_id)
+                .then_with(|| left.commit_id.cmp(&right.commit_id))
+        });
         let mut bookmarks = Vec::new();
         for commit in &commits {
             bookmarks.extend(
@@ -886,7 +894,13 @@ impl JjBridge {
             skipped_path_count: analysis.skipped_paths.len() as u64,
             remainder_hunks: details.then_some(remainder_hunks),
             skipped_paths: details.then_some(analysis.skipped_paths),
-            rewritten_descendants: partition_change_summary(impact.descendants),
+            rewritten_descendants: partition_change_summary(
+                impact
+                    .descendants
+                    .into_iter()
+                    .map(|descendant| descendant.change)
+                    .collect(),
+            ),
             affected_bookmarks: partition_name_summary(impact.bookmarks),
             affected_workspaces: partition_name_summary(impact.workspaces),
             conflicted: source.has_conflict() || current.as_ref().is_some_and(Commit::has_conflict),
@@ -1109,8 +1123,10 @@ impl JjBridge {
             .as_ref()
             .filter(|commit| commit.id() != source.id())
             .cloned();
+        let mut rewritten_by_commit_id = HashMap::new();
         tx.repo_mut()
             .transform_descendants(vec![source.id().clone()], async |mut rewriter| {
+                let old_commit_id = rewriter.old_commit().id().clone();
                 let is_working_destination = working_destination
                     .as_ref()
                     .is_some_and(|commit| commit.id() == rewriter.old_commit().id());
@@ -1124,11 +1140,23 @@ impl JjBridge {
                             .tree(),
                     );
                 }
-                builder.write().await?;
+                let rewritten = builder.write().await?;
+                rewritten_by_commit_id
+                    .insert(old_commit_id, history_change_from_commit(&rewritten));
                 Ok(())
             })
             .await
             .map_err(|_| AppError::BackendFailure { operation })?;
+        let rewritten_descendants = impact
+            .descendants
+            .iter()
+            .map(|descendant| {
+                rewritten_by_commit_id
+                    .remove(&descendant.commit_id)
+                    .ok_or(AppError::BackendFailure { operation })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let rewritten_summary = partition_change_summary(rewritten_descendants);
         for (workspace_name, working_copy_commit) in tx.base_repo().clone().view().wc_commit_ids() {
             if working_copy_commit == source.id() {
                 tx.repo_mut()
@@ -1153,13 +1181,6 @@ impl JjBridge {
             RemainderDestination::WorkingCopy => Some(self.current_commit().await?),
             RemainderDestination::RequireEmpty => None,
         };
-        let mut rewritten_descendants = Vec::with_capacity(impact.descendants.len());
-        for descendant in &impact.descendants {
-            rewritten_descendants.push(history_change_from_commit(
-                &self.resolve_one(&descendant.change_id).await?,
-            ));
-        }
-        let rewritten_summary = partition_change_summary(rewritten_descendants);
         let conflicted_descendant_count = rewritten_summary.conflicted_count;
         let parts = realized
             .iter()
@@ -2713,32 +2734,49 @@ impl JjBridge {
             .await
             .map_err(|_| AppError::BackendFailure { operation })?;
 
-        let git_lock = if is_colocated_git_workspace(&self.workspace, tx.base_repo()) {
-            let lock = FileLock::lock(self.workspace.repo_path().join("git_import_export.lock"))
-                .map_err(|_| AppError::BackendFailure { operation })?;
-            git::reset_head(tx.repo_mut(), &new_wc)
-                .await
-                .map_err(|_| AppError::BackendFailure { operation })?;
-            let stats = git::export_refs(tx.repo_mut())
-                .map_err(|_| AppError::BackendFailure { operation })?;
-            if !stats.failed_bookmarks.is_empty() || !stats.failed_tags.is_empty() {
-                return Err(AppError::BackendFailure { operation });
-            }
-            Some(lock)
-        } else {
-            None
-        };
+        let colocated = is_colocated_git_workspace(&self.workspace, tx.base_repo());
+        let git_lock = colocated
+            .then(|| FileLock::lock(self.workspace.repo_path().join("git_import_export.lock")))
+            .transpose()
+            .map_err(|_| AppError::BackendFailure { operation })?;
 
         let new_repo = tx
             .commit(operation_description)
             .await
             .map_err(|_| AppError::BackendFailure { operation })?;
         self.repo = new_repo;
+        if colocated && self.synchronize_colocated_git(&new_wc).await.is_err() {
+            return Err(AppError::OperationIncomplete {
+                operation,
+                failed_step: OperationIncompleteStep::ColocatedGitSynchronization,
+            });
+        }
         update_working_copy(&self.repo, &mut self.workspace, old_wc.as_ref(), &new_wc)
             .await
-            .map_err(|_| AppError::OperationIncomplete { operation })?;
+            .map_err(|_| AppError::OperationIncomplete {
+                operation,
+                failed_step: OperationIncompleteStep::WorkingCopyUpdate,
+            })?;
         drop(git_lock);
         Ok(true)
+    }
+
+    async fn synchronize_colocated_git(&mut self, new_wc: &Commit) -> Result<(), ()> {
+        let mut tx = self.repo.start_transaction();
+        tx.set_workspace_name(self.workspace.workspace_name());
+        tx.set_is_snapshot(true);
+        git::reset_head(tx.repo_mut(), new_wc)
+            .await
+            .map_err(|_| ())?;
+        let stats = git::export_refs(tx.repo_mut()).map_err(|_| ())?;
+        let failed = !stats.failed_bookmarks.is_empty() || !stats.failed_tags.is_empty();
+        if tx.repo().has_changes() {
+            self.repo = tx
+                .commit("synchronize colocated Git")
+                .await
+                .map_err(|_| ())?;
+        }
+        if failed { Err(()) } else { Ok(()) }
     }
 
     fn with_revset_context<T>(
@@ -3646,9 +3684,14 @@ struct LineHunk {
 }
 
 struct PartitionImpact {
-    descendants: Vec<HistoryChange>,
+    descendants: Vec<PartitionImpactDescendant>,
     bookmarks: Vec<String>,
     workspaces: Vec<String>,
+}
+
+struct PartitionImpactDescendant {
+    commit_id: CommitId,
+    change: HistoryChange,
 }
 
 struct TextHunkAnalysis {

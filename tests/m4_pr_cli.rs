@@ -1,9 +1,10 @@
 mod common;
 
 use std::fs;
+use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use common::repository;
 use tempfile::TempDir;
@@ -39,6 +40,26 @@ fn failing_gh(message: &str) -> TempDir {
     permissions.set_mode(0o755);
     fs::set_permissions(script, permissions).unwrap();
     directory
+}
+
+fn paginated_gh(first_page: &str, second_page: &str) -> (TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("gh");
+    let calls = directory.path().join("calls");
+    let count = directory.path().join("count");
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{calls}'; done\nprintf '%s\\n' --- >> '{calls}'\nif [ -f '{count}' ]; then IFS= read -r page < '{count}'; else page=0; fi\npage=$((page + 1))\nprintf '%s\\n' \"$page\" > '{count}'\nif [ \"$page\" -eq 1 ]; then printf '%s\\n' '{first_page}'; else printf '%s\\n' '{second_page}'; fi\n",
+            calls = calls.display(),
+            count = count.display(),
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(script, permissions).unwrap();
+    (directory, calls)
 }
 
 fn run_with_gh(repo: &Path, gh: &Path, args: &[&str]) -> std::process::Output {
@@ -151,4 +172,116 @@ fn pr_status_infers_a_unique_github_remote_identity() {
             .unwrap()
             .contains("repository: github.com/acme/project")
     );
+}
+
+#[test]
+fn pr_status_rejects_file_shaped_repository_components_before_running_gh() {
+    let repo = repository();
+    let gh = failing_gh("gh must not run");
+    let output = run_with_gh(
+        repo.path(),
+        gh.path(),
+        &["pr", "status", "7", "--repo", "acme/@secret"],
+    );
+
+    common::assert_error(output, "invalid_argument");
+
+    assert!(
+        common::run_jj(
+            repo.path(),
+            &[
+                "git",
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/@secret.git",
+            ],
+        )
+        .status
+        .success()
+    );
+    let inferred = run_with_gh(repo.path(), gh.path(), &["pr", "status", "7"]);
+    common::assert_error(inferred, "github_repository_not_found");
+}
+
+#[test]
+fn pr_status_uses_raw_fields_and_a_deliberate_process_environment() {
+    let repo = repository();
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("gh");
+    let invocation = directory.path().join("invocation");
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\npwd -P > '{invocation}'\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{invocation}'; done\nif IFS= read -r unexpected; then exit 92; fi\nprintf '%s\\n' '{READY_JSON}'\n",
+            invocation = invocation.display(),
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(script, permissions).unwrap();
+
+    let config = repo.path().join(".jj").join("jj-axi-test-config.toml");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jj-axi"))
+        .args(["pr", "status", "7", "--repo", "acme/project"])
+        .current_dir(repo.path())
+        .env("PATH", directory.path())
+        .env("JJ_CONFIG", config)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"caller input must not reach gh\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let invocation = fs::read_to_string(invocation).unwrap();
+    let child_cwd = invocation.lines().next().unwrap();
+    assert_eq!(
+        fs::canonicalize(child_cwd).unwrap(),
+        fs::canonicalize(repo.path()).unwrap()
+    );
+    assert!(invocation.contains("\n-f\nowner=acme\n-f\nname=project\n-F\nnumber=7\n"));
+}
+
+#[test]
+fn pr_status_maps_a_null_pull_request_to_not_found() {
+    let repo = repository();
+    let gh = fake_gh(r#"{"data":{"repository":{"pullRequest":null}}}"#);
+    let output = run_with_gh(
+        repo.path(),
+        gh.path(),
+        &["pr", "status", "7", "--repo", "acme/project"],
+    );
+
+    common::assert_error(output, "pull_request_not_found");
+}
+
+#[test]
+fn pr_status_rejects_checks_from_a_different_head_during_pagination() {
+    let repo = repository();
+    let first = r#"{"data":{"repository":{"pullRequest":{"number":7,"url":"https://github.com/acme/project/pull/7","state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"APPROVED","headRefName":"feature","headRefOid":"first-head","baseRefName":"main","commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"@cursor"}}}}}]}}}}}"#;
+    let second = r#"{"data":{"repository":{"pullRequest":{"number":7,"url":"https://github.com/acme/project/pull/7","state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","reviewDecision":"APPROVED","headRefName":"feature","headRefOid":"second-head","baseRefName":"main","commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}]}}}}}"#;
+    let (gh, calls) = paginated_gh(first, second);
+    let output = run_with_gh(
+        repo.path(),
+        gh.path(),
+        &["pr", "status", "7", "--repo", "acme/project"],
+    );
+
+    common::assert_error(output, "github_response_invalid");
+    let calls = fs::read_to_string(calls).unwrap();
+    assert!(calls.contains("\n-f\nafter=@cursor\n"));
+    assert!(!calls.contains("\n-F\nafter=@cursor\n"));
 }

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>jj-axi third-party licenses</title>
+  <style>
+    body { max-width: 72rem; margin: 2rem auto; font-family: sans-serif; line-height: 1.4; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <h1>jj-axi third-party licenses</h1>
+  <p>This document lists the licenses selected for third-party packages linked into jj-axi.</p>
+  {{#each licenses}}
+  <section>
+    <h2>{{name}} ({{id}})</h2>
+    <h3>Used by</h3>
+    <ul>
+      {{#each used_by}}
+      <li>{{crate.name}} {{crate.version}}</li>
+      {{/each}}
+    </ul>
+    <pre>{{text}}</pre>
+  </section>
+  {{/each}}
+</body>
+</html>
