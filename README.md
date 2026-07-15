@@ -223,16 +223,24 @@ The architecture and trade-offs are documented in [`docs/adr/`](./docs/adr/). Do
 
 ## Preliminary benchmark evidence
 
-A Codex `gpt-5.6-sol` low-effort, `k=3` calibration across five version-control tasks produced:
+A v0.2.1 candidate binary and medium-sized canonical skill were rerun with Codex `gpt-5.6-sol` at low effort across five version-control tasks (`k=3`, 15 graded runs):
+
+| Correct | Tasks passing all 3 runs | Mean wall time | Mean task VC commands | Mean inspections | Failed task VC commands | Warm transcript |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **15/15** | **5/5** | 70.0s | 9.1 | 6.9 | **0** | 15.4 KB |
+
+No task-visible version-control command failed. In particular, the tested guidance distinguishes local bookmark placement (`jj-axi bookmark set`) from remote publication (`finish --bookmark`). A preceding calibration of v0.2.1 with an over-compressed 1.3 KB skill also passed 15/15, but required 85.5s, 16.5 task VC commands, 14.0 inspections, and 29.5 KB of warm transcript on average. The tested 4.9 KB workflow guide restored concrete workflows without requiring speculative help probes; subsequent wording and recovery hardening did not change the measured command workflow.
+
+For historical context, an earlier `k=3` calibration used the then-current v0.1 skill alongside three comparison arms:
 
 | Arm | Correct | Mean wall time | Mean task VC commands |
 | --- | ---: | ---: | ---: |
 | plain Git | 15/15 | 50.1s | 20.1 |
 | GitButler + skill | 14/15 | 71.5s | 11.0 |
 | raw Jujutsu + external skill | 14/15 | 98.8s | 15.3 |
-| jj-axi + then-current canonical skill | **15/15** | **46.3s** | **9.9** |
+| jj-axi + then-current v0.1 skill | **15/15** | **46.3s** | **9.9** |
 
-In the calibrated split task, jj-axi completed 3/3 runs with one mutation and 9.7 task VC commands on average, versus Git's 28.0 commands. These are small-sample pilot results, not a general ranking or statistical proof. They predate the hybrid companion positioning and should not be read as evidence for that routing strategy; a dedicated raw-jj-plus-jj-axi benchmark is still needed. Correctness remains the gate, and benchmark work does not define product semantics.
+The historical comparison arms and the current v0.2.1 rerun are separate small-sample batches, so wall-time differences between them are directional rather than paired estimates. These are pilot results, not a general ranking or statistical proof. A dedicated raw-jj-plus-jj-axi benchmark is still needed for the hybrid companion positioning. Correctness remains the gate, and benchmark work does not define product semantics.
 
 The harness and task methodology are maintained in the [`aivv73/version-control-bench`](https://github.com/aivv73/version-control-bench) fork.
 

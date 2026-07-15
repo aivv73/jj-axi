@@ -232,6 +232,72 @@ fn finish_bookmark_pushes_and_retries_as_noop() {
 }
 
 #[test]
+fn finish_bookmark_without_remote_explains_local_placement_recovery() {
+    let directory = repository();
+    successful_output(
+        directory.path(),
+        &["describe", "@", "--message", "local change"],
+    );
+
+    let bookmark_argument = "\"local;feature\"";
+    let error = assert_error(
+        run_axi(
+            directory.path(),
+            &["finish", "@", "--bookmark", bookmark_argument],
+        ),
+        "remote_not_found",
+    );
+    assert!(error.contains("reason: remote_publication_requested_by_finish_bookmark"));
+    let target_change_id = error
+        .lines()
+        .find_map(|line| line.strip_prefix("  target_change_id: "))
+        .expect("error contains target change ID");
+    let rendered_recovery_command = error
+        .lines()
+        .find_map(|line| line.strip_prefix("  recovery_command: "))
+        .expect("error contains recovery command");
+    let recovery_command: String = serde_json::from_str(rendered_recovery_command)
+        .expect("quoted TOON recovery command is JSON-compatible");
+    assert!(recovery_command.contains("'\"local;feature\"'"));
+
+    let missing = run_jj(directory.path(), &["show", bookmark_argument, "--no-patch"]);
+    assert!(
+        !missing.status.success(),
+        "failed finish must not place a bookmark"
+    );
+
+    let binary_directory = Path::new(env!("CARGO_BIN_EXE_jj-axi"))
+        .parent()
+        .expect("test binary has a parent directory");
+    let path = std::env::join_paths(std::iter::once(binary_directory.to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("compose test PATH");
+    let recovered = Command::new("sh")
+        .args(["-c", &recovery_command])
+        .current_dir(directory.path())
+        .env("PATH", path)
+        .env(
+            "JJ_CONFIG",
+            directory.path().join(".jj/jj-axi-test-config.toml"),
+        )
+        .env("JJ_USER", "jj-axi test")
+        .env("JJ_EMAIL", "jj-axi@example.test")
+        .output()
+        .expect("run recovery command");
+    assert!(
+        recovered.status.success(),
+        "recovery failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&recovered.stdout),
+        String::from_utf8_lossy(&recovered.stderr),
+    );
+    assert_eq!(
+        jj_template(directory.path(), bookmark_argument, "change_id"),
+        target_change_id,
+    );
+}
+
+#[test]
 fn finish_bookmark_signing_rewrites_target_and_preserves_out_of_range_ancestor() {
     let directory = repository();
     let remote = bare_remote();

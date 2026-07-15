@@ -145,6 +145,11 @@ pub enum AppError {
     RemoteNotFound {
         remote: String,
     },
+    FinishPublicationRemoteNotFound {
+        remote: String,
+        bookmark: String,
+        target_change_id: String,
+    },
     RemoteBookmarkRejected {
         bookmark: String,
         remote: String,
@@ -349,6 +354,30 @@ impl AppError {
                 ("code", string("remote_not_found")),
                 ("remote", string(remote)),
             ]),
+            Self::FinishPublicationRemoteNotFound {
+                remote,
+                bookmark,
+                target_change_id,
+            } => {
+                let bookmark_expression = serde_json::to_string(bookmark)
+                    .expect("serializing a bookmark name as a JSON string cannot fail");
+                let recovery_command = format!(
+                    "jj-axi bookmark set {} --to {}",
+                    shell_quote(&bookmark_expression),
+                    shell_quote(target_change_id),
+                );
+                ToonValue::Object(vec![
+                    ("code", string("remote_not_found")),
+                    ("remote", string(remote)),
+                    ("bookmark", string(bookmark)),
+                    ("target_change_id", string(target_change_id)),
+                    (
+                        "reason",
+                        string("remote_publication_requested_by_finish_bookmark"),
+                    ),
+                    ("recovery_command", string(&recovery_command)),
+                ])
+            }
             Self::RemoteBookmarkRejected {
                 bookmark,
                 remote,
@@ -628,6 +657,10 @@ impl AppError {
             Self::Internal => ToonValue::Object(vec![("code", string("internal"))]),
         }
     }
+}
+
+fn shell_quote(argument: &str) -> String {
+    format!("'{}'", argument.replace('\'', "'\"'\"'"))
 }
 
 fn string(value: &str) -> ToonValue {
