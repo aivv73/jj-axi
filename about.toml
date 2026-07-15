@@ -13,6 +13,21 @@ accepted = [
     "Unlicense",
     "WTFPL",
 ]
+no-clearly-defined = true
 
 [private]
 ignore = true
+
+[libmimalloc-sys.clarify]
+license = "MIT"
+
+[[libmimalloc-sys.clarify.files]]
+path = "LICENSE.txt"
+checksum = "a08554fab028af3af047e8588d32d019662c1b1bf07959a195a2f75fe340726b"
+
+[deltae.clarify]
+license = "MIT"
+
+[[deltae.clarify.files]]
+path = "LICENSE"
+checksum = "581056b179603e8191b5d6e54e543abfecc13591b39c0d60ec8593d7013568ee"
