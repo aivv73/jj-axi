@@ -213,7 +213,7 @@ fn pr_status_uses_raw_fields_and_a_deliberate_process_environment() {
     fs::write(
         &script,
         format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$PWD\" > '{invocation}'\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{invocation}'; done\nif IFS= read -r unexpected; then exit 92; fi\nprintf '%s\\n' '{READY_JSON}'\n",
+            "#!/bin/sh\npwd -P > '{invocation}'\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{invocation}'; done\nif IFS= read -r unexpected; then exit 92; fi\nprintf '%s\\n' '{READY_JSON}'\n",
             invocation = invocation.display(),
         ),
     )
@@ -247,7 +247,11 @@ fn pr_status_uses_raw_fields_and_a_deliberate_process_environment() {
     );
 
     let invocation = fs::read_to_string(invocation).unwrap();
-    assert!(invocation.starts_with(&format!("{}\n", repo.path().display())));
+    let child_cwd = invocation.lines().next().unwrap();
+    assert_eq!(
+        fs::canonicalize(child_cwd).unwrap(),
+        fs::canonicalize(repo.path()).unwrap()
+    );
     assert!(invocation.contains("\n-f\nowner=acme\n-f\nname=project\n-F\nnumber=7\n"));
 }
 
