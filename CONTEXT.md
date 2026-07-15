@@ -53,7 +53,7 @@ The body of the canonical skill document, printed without YAML frontmatter by ba
 _Avoid_: Home view, separate bootstrap file, mini skill
 
 **Canonical skill document**:
-The compact, versioned, repository-independent instruction artifact that routes an agent to the correct jj-axi command and preserves only cross-command safety rules. Exact execution contracts belong to installed command help.
+The compact, versioned, repository-independent instruction artifact that routes an agent to the correct jj-axi command, preserves cross-command safety rules, and includes bounded examples for high-frequency workflows. Exact flags, limits, edge cases, and version-sensitive recovery belong to installed command help.
 _Avoid_: Skill template, generated prompt, command manual
 
 **Agent reference document**:

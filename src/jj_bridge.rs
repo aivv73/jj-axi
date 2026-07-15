@@ -2919,7 +2919,16 @@ impl JjBridge {
             argument: "bookmark",
             constraint: "valid_bookmark_name",
         })?;
-        let remote = self.select_publication_remote(None)?;
+        let remote = self
+            .select_publication_remote(None)
+            .map_err(|error| match error {
+                AppError::RemoteNotFound { remote } => AppError::FinishPublicationRemoteNotFound {
+                    remote,
+                    bookmark: name.as_str().to_owned(),
+                    target_change_id: target.change_id().to_string(),
+                },
+                other => other,
+            })?;
         let old_local_target = self.repo.view().get_local_bookmark(&name).clone();
 
         if old_local_target.is_present()

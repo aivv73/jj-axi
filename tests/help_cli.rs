@@ -70,7 +70,12 @@ fn history_command_help_contains_version_matched_workflows_and_safety_contracts(
         ),
         (
             &["finish", "--help"],
-            &["validates local readiness", "structured partial result"],
+            &[
+                "validates local readiness",
+                "structured partial result",
+                "remote publication",
+                "bookmark set",
+            ],
         ),
         (
             &["bookmark", "push", "--help"],

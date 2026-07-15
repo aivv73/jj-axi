@@ -136,8 +136,10 @@ Examples:
 const FINISH_HELP: &str = r#"Validate local readiness and optionally publish one exact bookmark.
 
 `finish <change>` validates local readiness. `finish <change> --bookmark <name>`
-also creates or fast-forwards that exact bookmark and pushes only that name.
-finish never invents a bookmark or infers one from context.
+requests remote publication: it creates or fast-forwards that exact bookmark and
+pushes only that name. For local-only placement, use
+`jj-axi bookmark set <name> --to <change>` instead. finish never invents a
+bookmark or infers one from context.
 
 When --message is omitted, the stored description must be non-empty. Description
 and bookmark updates are one local operation committed before push. A push
